@@ -14,13 +14,19 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.ViewModelProvider
+import com.example.credflow.di.AppContainer
+import com.example.credflow.domain.model.Customer
+import com.example.credflow.ui.viewmodel.CredflowViewModel
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -33,12 +39,26 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CredflowApp() {
-    val backStack = remember { mutableStateListOf(Screen.Splash) }
+    val context = LocalContext.current
+    val appContainer = remember { AppContainer(context.applicationContext) }
+    val viewModel: CredflowViewModel = remember {
+        ViewModelProvider(
+            context as ComponentActivity,
+            CredflowViewModel.provideFactory(
+                repository = appContainer.repository,
+                sessionManager = appContainer.sessionManager,
+                apiService = appContainer.apiService
+            )
+        )[CredflowViewModel::class.java]
+    }
+    val uiState by viewModel.uiState.collectAsState()
+
+    val backStack = remember {
+        mutableStateListOf(if (appContainer.sessionManager.isLoggedIn) Screen.Dashboard else Screen.Splash)
+    }
     val screen = backStack.lastOrNull() ?: Screen.Splash
-    var selectedCustomer by remember { mutableStateOf<Customer?>(null) }
-    var searchText by remember { mutableStateOf("") }
+
     var chatQuestion by remember { mutableStateOf("") }
-    var chatAnswer by remember { mutableStateOf("") }
     var name by remember { mutableStateOf("") }
     var phone by remember { mutableStateOf("") }
     var amount by remember { mutableStateOf("") }
@@ -47,26 +67,6 @@ fun CredflowApp() {
     var note by remember { mutableStateOf("") }
     var paymentAmount by remember { mutableStateOf("") }
     var paymentMethod by remember { mutableStateOf("Cash") }
-    var paidCustomer by remember { mutableStateOf<Customer?>(null) }
-    var toast by remember { mutableStateOf("") }
-    val customers = remember { mutableStateListOf<Customer>() }
-    val payments = remember { mutableStateListOf<String>() }
-
-    var businessName by remember { mutableStateOf("Credflow Finance") }
-    var ownerName by remember { mutableStateOf("Ramesh Kumar") }
-    var ownerPhone by remember { mutableStateOf("9876543210") }
-    var ownerEmail by remember { mutableStateOf("ramesh@credflow.com") }
-    var businessAddress by remember { mutableStateOf("12 Brigade Road, Bengaluru") }
-    var gstinNumber by remember { mutableStateOf("29ABCDE1234F1Z5") }
-
-    var acceptCash by remember { mutableStateOf(true) }
-    var acceptUpi by remember { mutableStateOf(true) }
-    var acceptBank by remember { mutableStateOf(false) }
-    var dailyReminders by remember { mutableStateOf(true) }
-    var overdueAlerts by remember { mutableStateOf(true) }
-    var defaultCycle by remember { mutableStateOf("Daily") }
-    var appLockEnabled by remember { mutableStateOf(false) }
-    var lateFeeRule by remember { mutableStateOf("No Charge") }
 
     fun go(target: Screen) {
         if (backStack.lastOrNull() != target) {
@@ -110,37 +110,35 @@ fun CredflowApp() {
         })
     }
     fun saveCustomer() {
-        val parsedAmount = amount.toDoubleOrNull()
-        if (name.isBlank() || phone.isBlank() || parsedAmount == null || parsedAmount <= 0) {
-            toast = "Enter customer name, phone and a valid amount."
-        } else {
-            val c = Customer(name.trim(), phone.trim(), parsedAmount, cycle, if (cycle == "Daily") "Daily" else if (cycle == "Monthly") "Monthly" else day, due = parsedAmount, note = note)
-            customers.add(c)
-            selectedCustomer = c
-            toast = "Customer saved successfully."
-            val targetScreen = when (cycle) {
-                "Daily" -> Screen.DailyCustomers
-                "Weekly" -> Screen.WeeklyCustomers
-                else -> Screen.MonthlyCustomers
+        viewModel.addCustomer(
+            name = name,
+            phone = phone,
+            amountStr = amount,
+            cycle = cycle,
+            day = day,
+            note = note,
+            onSuccess = { savedCustomer ->
+                val targetScreen = when (savedCustomer.cycle) {
+                    "Daily" -> Screen.DailyCustomers
+                    "Weekly" -> Screen.WeeklyCustomers
+                    else -> Screen.MonthlyCustomers
+                }
+                if (backStack.size > 1) {
+                    backStack.removeAt(backStack.size - 1)
+                }
+                go(targetScreen)
             }
-            if (backStack.size > 1) {
-                backStack.removeAt(backStack.size - 1)
-            }
-            go(targetScreen)
-        }
+        )
     }
     fun recordPayment(c: Customer, value: Double, method: String) {
-        val idx = customers.indexOfFirst { it.phone == c.phone && it.cycle == c.cycle }
-        if (idx >= 0 && value > 0) {
-            val old = customers[idx]
-            val updated = old.copy(paid = old.paid + value, due = (old.due - value).coerceAtLeast(0.0))
-            customers[idx] = updated
-            paidCustomer = updated
-            payments.add("${old.name} • ${rupees(value)} • $method")
-            selectedCustomer = updated
-            toast = "Collection updated."
-            go(Screen.CollectionSaved)
-        } else toast = "Enter a valid collection amount."
+        viewModel.recordPayment(
+            customer = c,
+            amountStr = value.toString(),
+            method = method,
+            onSuccess = {
+                go(Screen.CollectionSaved)
+            }
+        )
     }
 
     BackHandler(enabled = backStack.size > 1) {
@@ -170,6 +168,11 @@ fun CredflowApp() {
                                 onClick = { goBack() }
                             ) { Icon(Icons.Default.ArrowBack, "Back", tint = Navy) }
                         },
+                        actions = {
+                            IconButton(onClick = { viewModel.refreshData() }) {
+                                Icon(Icons.Default.Refresh, "Sync from MySQL", tint = Navy)
+                            }
+                        },
                         colors = TopAppBarDefaults.topAppBarColors(containerColor = PageBg)
                     )
                 }
@@ -198,9 +201,15 @@ fun CredflowApp() {
                 }
             },
             snackbarHost = {
-                if (toast.isNotBlank()) {
+                uiState.userMessage?.let { msg ->
                     SnackbarHost(hostState = remember { SnackbarHostState() }) {
-                        Snackbar { Text(toast) }
+                        Snackbar(
+                            action = {
+                                TextButton(onClick = { viewModel.clearUserMessage() }) {
+                                    Text("Dismiss", color = Color.White)
+                                }
+                            }
+                        ) { Text(msg) }
                     }
                 }
             }
@@ -211,7 +220,13 @@ fun CredflowApp() {
                     .then(if (screen == Screen.Splash) Modifier else Modifier.padding(padding))
             ) {
                 when (screen) {
-                    Screen.Splash -> WelcomeSplash { go(Screen.Welcome) }
+                    Screen.Splash -> WelcomeSplash {
+                        if (appContainer.sessionManager.isLoggedIn) {
+                            resetTo(Screen.Dashboard)
+                        } else {
+                            go(Screen.Welcome)
+                        }
+                    }
                     Screen.Welcome -> WelcomePage(
                         onLogin = { go(Screen.Login) },
                         onExplore = { go(Screen.Login) }
@@ -219,38 +234,21 @@ fun CredflowApp() {
                     Screen.Login -> LoginPage(
                         onBack = { goBack() },
                         onLogin = { identity, password ->
-                            if (identity.isNotBlank() && password.isNotBlank()) {
-                                if (identity.contains("@")) {
-                                    ownerEmail = identity
-                                } else if (identity.length >= 10) {
-                                    ownerPhone = identity
-                                }
-                                toast = "Welcome back!"
-                                resetTo(Screen.Dashboard)
-                            } else toast = "Enter a valid email/phone and password."
+                            viewModel.login(identity, password) { resetTo(Screen.Dashboard) }
                         },
                         onSignUp = { nameVal, bNameVal, identity, password ->
-                            if (nameVal.isNotBlank()) ownerName = nameVal
-                            if (bNameVal.isNotBlank()) businessName = bNameVal
-                            if (identity.contains("@")) {
-                                ownerEmail = identity
-                            } else if (identity.length >= 10) {
-                                ownerPhone = identity
-                            }
-                            toast = "Account created successfully!"
-                            resetTo(Screen.Dashboard)
+                            viewModel.signUp(nameVal, bNameVal, identity, password) { resetTo(Screen.Dashboard) }
                         },
-                        onGoogleSignIn = { chosenName, chosenEmail ->
-                            ownerName = chosenName
-                            ownerEmail = chosenEmail
-                            businessName = "${chosenName.substringBefore(" ")}'s Finance Book"
-                            toast = "Signed in as $chosenEmail"
-                            resetTo(Screen.Dashboard)
-                        }
+                        onGoogleSignInToken = { idToken ->
+                            viewModel.googleSignInWithToken(idToken) { resetTo(Screen.Dashboard) }
+                        },
+                        isLoading = uiState.isAuthenticating,
+                        authError = uiState.authError,
+                        onClearError = { viewModel.clearAuthError() }
                     )
                     Screen.Dashboard -> DashboardPage(
-                        customers = customers,
-                        payments = payments,
+                        customers = uiState.customers,
+                        payments = uiState.payments.map { it.toDisplayText() },
                         onCategories = { go(Screen.Categories) },
                         onSearch = { go(Screen.Search) },
                         onReports = { go(Screen.Reports) },
@@ -258,10 +256,11 @@ fun CredflowApp() {
                         onSettings = { go(Screen.Settings) },
                         onDaily = { go(Screen.DailyCustomers) },
                         onWeekly = { go(Screen.WeeklyCustomers) },
-                        onMonthly = { go(Screen.MonthlyCustomers) }
+                        onMonthly = { go(Screen.MonthlyCustomers) },
+                        onRefresh = { viewModel.refreshData() }
                     )
                     Screen.Categories -> CategoriesPage(
-                        customers = customers,
+                        customers = uiState.customers,
                         onDaily = { go(Screen.DailyCustomers) },
                         onWeekly = { go(Screen.WeeklyCustomers) },
                         onMonthly = { go(Screen.MonthlyCustomers) },
@@ -276,14 +275,22 @@ fun CredflowApp() {
                         CustomerListPage(
                             title = screen.title,
                             cycle = listCycle,
-                            customers = customers.filter { it.cycle == listCycle },
+                            customers = uiState.customers.filter { it.cycle == listCycle },
                             onAdd = { openAdd(listCycle) },
-                            onSelect = { selectedCustomer = it; go(when (listCycle) {
-                                "Daily" -> Screen.DailyDetails
-                                "Weekly" -> Screen.WeeklyOverview
-                                else -> Screen.MonthlyDetails
-                            }) },
-                            onCollect = { selectedCustomer = it; paymentAmount = ""; paymentMethod = "Cash"; go(Screen.CollectionEntry) },
+                            onSelect = {
+                                viewModel.selectCustomer(it)
+                                go(when (listCycle) {
+                                    "Daily" -> Screen.DailyDetails
+                                    "Weekly" -> Screen.WeeklyOverview
+                                    else -> Screen.MonthlyDetails
+                                })
+                            },
+                            onCollect = {
+                                viewModel.selectCustomer(it)
+                                paymentAmount = ""
+                                paymentMethod = "Cash"
+                                go(Screen.CollectionEntry)
+                            },
                             onWeekday = { day = it; go(weekdayScreen(it)) }
                         )
                     }
@@ -297,8 +304,13 @@ fun CredflowApp() {
                         onSave = { saveCustomer() }
                     )
                     Screen.DailyDetails, Screen.MonthlyDetails, Screen.WeeklyOverview -> CustomerDetailsPage(
-                        customer = selectedCustomer,
-                        onCollect = { selectedCustomer?.let { paymentAmount = ""; go(Screen.CollectionEntry) } },
+                        customer = uiState.selectedCustomer,
+                        onCollect = {
+                            if (uiState.selectedCustomer != null) {
+                                paymentAmount = ""
+                                go(Screen.CollectionEntry)
+                            }
+                        },
                         onHistory = { go(Screen.PaymentHistory) },
                         onBack = { goBack() }
                     )
@@ -306,118 +318,122 @@ fun CredflowApp() {
                         val weekday = screen.title.removeSuffix(" Collection")
                         CustomerListPage(
                             title = screen.title, cycle = "Weekly",
-                            customers = customers.filter { it.cycle == "Weekly" && it.day.equals(weekday, true) },
+                            customers = uiState.customers.filter { it.cycle == "Weekly" && it.day.equals(weekday, true) },
                             onAdd = { day = weekday; openAdd("Weekly") },
-                            onSelect = { selectedCustomer = it; go(Screen.WeeklyOverview) },
-                            onCollect = { selectedCustomer = it; paymentAmount = ""; go(Screen.CollectionEntry) },
+                            onSelect = {
+                                viewModel.selectCustomer(it)
+                                go(Screen.WeeklyOverview)
+                            },
+                            onCollect = {
+                                viewModel.selectCustomer(it)
+                                paymentAmount = ""
+                                go(Screen.CollectionEntry)
+                            },
                             onWeekday = { day = it; go(weekdayScreen(it)) }
                         )
                     }
                     Screen.CollectionEntry -> CollectionEntryPage(
-                        customer = selectedCustomer,
+                        customer = uiState.selectedCustomer,
                         amount = paymentAmount, onAmount = { paymentAmount = it },
                         method = paymentMethod, onMethod = { paymentMethod = it },
                         onSave = {
-                            val c = selectedCustomer
+                            val c = uiState.selectedCustomer
                             val v = paymentAmount.toDoubleOrNull()
                             if (c != null && v != null && v > 0) recordPayment(c, v, paymentMethod)
-                            else toast = "Enter a valid amount."
                         }
                     )
                     Screen.CollectionSaved -> CollectionSavedPage(
-                        customer = paidCustomer ?: selectedCustomer,
+                        customer = uiState.paidCustomer ?: uiState.selectedCustomer,
                         onDone = { resetTo(Screen.Dashboard) },
                         onHistory = { go(Screen.PaymentHistory) }
                     )
                     Screen.PaymentHistory -> SimpleListPage(
-                        "Payment History", "Collections recorded in this app",
-                        payments.toList().ifEmpty { listOf("No collections recorded yet.") },
+                        "Payment History", "Collections recorded in MySQL database",
+                        uiState.payments.map { it.toDisplayText() }.ifEmpty { listOf("No collections recorded yet.") },
                         onPrimary = { goBack() }, primaryLabel = "Back"
                     )
-                    Screen.Pending -> CustomerListPage("Pending Collections", "All", customers.filter { it.due > 0 },
-                        onAdd = { openAdd("Daily") }, onSelect = { selectedCustomer = it; go(Screen.DailyDetails) },
-                        onCollect = { selectedCustomer = it; paymentAmount = ""; go(Screen.CollectionEntry) }, onWeekday = { go(weekdayScreen(it)) })
-                    Screen.Overdue -> CustomerListPage("Overdue Customers", "All", customers.filter { it.due > 0 },
-                        onAdd = { openAdd("Daily") }, onSelect = { selectedCustomer = it; go(Screen.DailyDetails) },
-                        onCollect = { selectedCustomer = it; paymentAmount = ""; go(Screen.CollectionEntry) }, onWeekday = { go(weekdayScreen(it)) })
+                    Screen.Pending -> CustomerListPage("Pending Collections", "All", uiState.customers.filter { it.due > 0 },
+                        onAdd = { openAdd("Daily") }, onSelect = { viewModel.selectCustomer(it); go(Screen.DailyDetails) },
+                        onCollect = { viewModel.selectCustomer(it); paymentAmount = ""; go(Screen.CollectionEntry) }, onWeekday = { go(weekdayScreen(it)) })
+                    Screen.Overdue -> CustomerListPage("Overdue Customers", "All", uiState.customers.filter { it.due > 0 },
+                        onAdd = { openAdd("Daily") }, onSelect = { viewModel.selectCustomer(it); go(Screen.DailyDetails) },
+                        onCollect = { viewModel.selectCustomer(it); paymentAmount = ""; go(Screen.CollectionEntry) }, onWeekday = { go(weekdayScreen(it)) })
                     Screen.AIAssistant -> AIAssistantPage(
                         onChat = { go(Screen.AIChatbot) }, onPrediction = { go(Screen.AIPrediction) },
                         onForecast = { go(Screen.Forecast) }, onReports = { go(Screen.Reports) }
                     )
                     Screen.AIChatbot -> AIChatPage(
                         question = chatQuestion, onQuestion = { chatQuestion = it },
-                        answer = chatAnswer,
-                        onAsk = {
-                            val q = chatQuestion.lowercase()
-                            chatAnswer = when {
-                                "overdue" in q || "pending" in q -> "There are ${customers.count { it.due > 0 }} customers with a remaining balance of ${rupees(customers.sumOf { it.due })}. This is calculated from the customer records currently saved on this device."
-                                "today" in q || "daily" in q -> "Daily customers: ${customers.count { it.cycle == "Daily" }}. Remaining amount: ${rupees(customers.filter { it.cycle == "Daily" }.sumOf { it.due })}."
-                                "week" in q || "weekly" in q -> "Weekly customers: ${customers.count { it.cycle == "Weekly" }}. Remaining amount: ${rupees(customers.filter { it.cycle == "Weekly" }.sumOf { it.due })}."
-                                "month" in q || "monthly" in q -> "Monthly customers: ${customers.count { it.cycle == "Monthly" }}. Remaining amount: ${rupees(customers.filter { it.cycle == "Monthly" }.sumOf { it.due })}."
-                                "collect" in q || "paid" in q -> "Collections recorded: ${payments.size}. Total remaining amount: ${rupees(customers.sumOf { it.due })}."
-                                else -> "Try asking: “How much is pending?”, “Show weekly customers”, or “How much remains for daily customers?” This demo answers from records saved on this device."
-                            }
-                        }
+                        answer = uiState.aiAnswer,
+                        onAsk = { viewModel.askAi(chatQuestion) }
                     )
-                    Screen.AIPrediction -> PredictionPage(customers = customers, onDetails = { go(Screen.RiskDetails) })
-                    Screen.RiskDetails -> SimpleListPage("Repayment Risk Details", "Demo insight — not a validated prediction model",
-                        listOf("Customers with a remaining balance: ${customers.count { it.due > 0 }}",
-                            "Total remaining amount: ${rupees(customers.sumOf { it.due })}",
-                            "This version uses basic record summaries only. Connect a trained model and historical labelled payments to produce a real risk estimate."),
+                    Screen.AIPrediction -> PredictionPage(customers = uiState.customers, onDetails = { go(Screen.RiskDetails) })
+                    Screen.RiskDetails -> SimpleListPage("Repayment Risk Details", "Demo insight — computed from your live records",
+                        listOf("Customers with a remaining balance: ${uiState.customers.count { it.due > 0 }}",
+                            "Total remaining amount: ${rupees(uiState.totalOutstanding)}",
+                            "Total collected so far: ${rupees(uiState.totalCollected)}",
+                            "This insight is computed dynamically from your live MySQL and cached customer records."),
                         onPrimary = { goBack() }, primaryLabel = "Back to prediction")
-                    Screen.Forecast -> SimpleListPage("AI Collection Forecast", "Estimates based on records currently available",
-                        listOf("Total remaining amount: ${rupees(customers.sumOf { it.due })}",
-                            "Daily remaining: ${rupees(customers.filter { it.cycle == "Daily" }.sumOf { it.due })}",
-                            "Weekly remaining: ${rupees(customers.filter { it.cycle == "Weekly" }.sumOf { it.due })}",
-                            "Monthly remaining: ${rupees(customers.filter { it.cycle == "Monthly" }.sumOf { it.due })}",
-                            "This is a simple summary, not a trained forecasting model."),
+                    Screen.Forecast -> SimpleListPage("AI Collection Forecast", "Estimates based on live records currently available",
+                        listOf("Total remaining amount: ${rupees(uiState.totalOutstanding)}",
+                            "Daily remaining: ${rupees(uiState.customers.filter { it.cycle == "Daily" }.sumOf { it.due })}",
+                            "Weekly remaining: ${rupees(uiState.customers.filter { it.cycle == "Weekly" }.sumOf { it.due })}",
+                            "Monthly remaining: ${rupees(uiState.customers.filter { it.cycle == "Monthly" }.sumOf { it.due })}",
+                            "Active customer count: ${uiState.customersCount}"),
                         onPrimary = { go(Screen.WeeklyForecast) }, primaryLabel = "Weekly forecast",
                         onSecondary = { go(Screen.MonthlyForecast) }, secondaryLabel = "Monthly forecast")
-                    Screen.WeeklyForecast -> ForecastDetailPage("Weekly Forecast Details", customers, "Weekly", onBack = { goBack() })
-                    Screen.MonthlyForecast -> ForecastDetailPage("Monthly Forecast Details", customers, "Monthly", onBack = { goBack() })
-                    Screen.Reports -> ReportsPage(customers, payments, onDaily = { go(Screen.DailyReport) }, onWeekly = { go(Screen.WeeklyReport) }, onMonthly = { go(Screen.MonthlyReport) })
-                    Screen.DailyReport -> ReportDetailPage("Daily Report Details", customers.filter { it.cycle == "Daily" }, payments, onBack = { goBack() })
-                    Screen.WeeklyReport -> ReportDetailPage("Weekly Report Details", customers.filter { it.cycle == "Weekly" }, payments, onBack = { goBack() })
-                    Screen.MonthlyReport -> ReportDetailPage("Monthly Report Details", customers.filter { it.cycle == "Monthly" }, payments, onBack = { goBack() })
+                    Screen.WeeklyForecast -> ForecastDetailPage("Weekly Forecast Details", uiState.customers, "Weekly", onBack = { goBack() })
+                    Screen.MonthlyForecast -> ForecastDetailPage("Monthly Forecast Details", uiState.customers, "Monthly", onBack = { goBack() })
+                    Screen.Reports -> ReportsPage(uiState.customers, uiState.payments.map { it.toDisplayText() }, onDaily = { go(Screen.DailyReport) }, onWeekly = { go(Screen.WeeklyReport) }, onMonthly = { go(Screen.MonthlyReport) })
+                    Screen.DailyReport -> ReportDetailPage("Daily Report Details", uiState.customers.filter { it.cycle == "Daily" }, uiState.payments.map { it.toDisplayText() }, onBack = { goBack() })
+                    Screen.WeeklyReport -> ReportDetailPage("Weekly Report Details", uiState.customers.filter { it.cycle == "Weekly" }, uiState.payments.map { it.toDisplayText() }, onBack = { goBack() })
+                    Screen.MonthlyReport -> ReportDetailPage("Monthly Report Details", uiState.customers.filter { it.cycle == "Monthly" }, uiState.payments.map { it.toDisplayText() }, onBack = { goBack() })
                     Screen.Search -> SearchPage(
-                        query = searchText, onQuery = { searchText = it },
-                        customers = customers.filter { it.name.contains(searchText, true) || it.phone.contains(searchText, true) },
-                        onSelect = { selectedCustomer = it; go(if (it.cycle == "Daily") Screen.DailyDetails else if (it.cycle == "Weekly") Screen.WeeklyOverview else Screen.MonthlyDetails) },
-                        onCollect = { selectedCustomer = it; paymentAmount = ""; go(Screen.CollectionEntry) }
+                        query = uiState.searchQuery, onQuery = { viewModel.updateSearchQuery(it) },
+                        customers = uiState.filteredCustomers,
+                        onSelect = {
+                            viewModel.selectCustomer(it)
+                            go(if (it.cycle == "Daily") Screen.DailyDetails else if (it.cycle == "Weekly") Screen.WeeklyOverview else Screen.MonthlyDetails)
+                        },
+                        onCollect = {
+                            viewModel.selectCustomer(it)
+                            paymentAmount = ""
+                            go(Screen.CollectionEntry)
+                        }
                     )
                     Screen.Notifications -> SimpleListPage("Notifications", "Collection reminders and updates",
-                        listOf("${customers.count { it.due > 0 }} customers have a remaining balance.",
-                            "${payments.size} collection entries recorded.",
-                            "Reminder notifications are UI-only in this starter; device notifications need to be configured separately."),
+                        listOf("${uiState.customers.count { it.due > 0 }} customers have a remaining balance.",
+                            "${uiState.payments.size} collection entries recorded.",
+                            if (uiState.pendingOperationsCount > 0) "${uiState.pendingOperationsCount} operations queued for offline sync." else "All records synced with MySQL."),
                         onPrimary = { goBack() }, primaryLabel = "Back")
                     Screen.Profile -> ProfilePage(
-                        businessName = businessName, onBusinessNameChange = { businessName = it },
-                        ownerName = ownerName, onOwnerNameChange = { ownerName = it },
-                        ownerPhone = ownerPhone, onOwnerPhoneChange = { ownerPhone = it },
-                        ownerEmail = ownerEmail, onOwnerEmailChange = { ownerEmail = it },
-                        businessAddress = businessAddress, onAddressChange = { businessAddress = it },
-                        gstinNumber = gstinNumber, onGstinChange = { gstinNumber = it },
-                        onSave = { toast = "Business profile saved successfully." },
+                        businessName = uiState.businessName, onBusinessNameChange = { bName -> viewModel.updateProfile(bName, uiState.ownerName, uiState.ownerPhone, uiState.ownerEmail, uiState.businessAddress, uiState.gstinNumber) },
+                        ownerName = uiState.ownerName, onOwnerNameChange = { oName -> viewModel.updateProfile(uiState.businessName, oName, uiState.ownerPhone, uiState.ownerEmail, uiState.businessAddress, uiState.gstinNumber) },
+                        ownerPhone = uiState.ownerPhone, onOwnerPhoneChange = { oPhone -> viewModel.updateProfile(uiState.businessName, uiState.ownerName, oPhone, uiState.ownerEmail, uiState.businessAddress, uiState.gstinNumber) },
+                        ownerEmail = uiState.ownerEmail, onOwnerEmailChange = { oEmail -> viewModel.updateProfile(uiState.businessName, uiState.ownerName, uiState.ownerPhone, oEmail, uiState.businessAddress, uiState.gstinNumber) },
+                        businessAddress = uiState.businessAddress, onAddressChange = { bAddr -> viewModel.updateProfile(uiState.businessName, uiState.ownerName, uiState.ownerPhone, uiState.ownerEmail, bAddr, uiState.gstinNumber) },
+                        gstinNumber = uiState.gstinNumber, onGstinChange = { gst -> viewModel.updateProfile(uiState.businessName, uiState.ownerName, uiState.ownerPhone, uiState.ownerEmail, uiState.businessAddress, gst) },
+                        onSave = { },
                         onOpenSettings = { go(Screen.Settings) }
                     )
                     Screen.Settings -> SettingsPage(
-                        acceptCash = acceptCash, onAcceptCashChange = { acceptCash = it },
-                        acceptUpi = acceptUpi, onAcceptUpiChange = { acceptUpi = it },
-                        acceptBank = acceptBank, onAcceptBankChange = { acceptBank = it },
-                        dailyReminders = dailyReminders, onDailyRemindersChange = { dailyReminders = it },
-                        overdueAlerts = overdueAlerts, onOverdueAlertsChange = { overdueAlerts = it },
-                        defaultCycle = defaultCycle, onDefaultCycleChange = { defaultCycle = it },
-                        appLockEnabled = appLockEnabled, onAppLockChange = { appLockEnabled = it },
-                        lateFeeRule = lateFeeRule, onLateFeeRuleChange = { lateFeeRule = it },
-                        onSave = { toast = "Settings saved successfully." },
+                        acceptCash = uiState.acceptCash, onAcceptCashChange = { viewModel.updateSettings(acceptCash = it, acceptUpi = uiState.acceptUpi, acceptBank = uiState.acceptBank, dailyReminders = uiState.dailyReminders, overdueAlerts = uiState.overdueAlerts, defaultCycle = uiState.defaultCycle, appLockEnabled = uiState.appLockEnabled, lateFeeRule = uiState.lateFeeRule) },
+                        acceptUpi = uiState.acceptUpi, onAcceptUpiChange = { viewModel.updateSettings(acceptCash = uiState.acceptCash, acceptUpi = it, acceptBank = uiState.acceptBank, dailyReminders = uiState.dailyReminders, overdueAlerts = uiState.overdueAlerts, defaultCycle = uiState.defaultCycle, appLockEnabled = uiState.appLockEnabled, lateFeeRule = uiState.lateFeeRule) },
+                        acceptBank = uiState.acceptBank, onAcceptBankChange = { viewModel.updateSettings(acceptCash = uiState.acceptCash, acceptUpi = uiState.acceptUpi, acceptBank = it, dailyReminders = uiState.dailyReminders, overdueAlerts = uiState.overdueAlerts, defaultCycle = uiState.defaultCycle, appLockEnabled = uiState.appLockEnabled, lateFeeRule = uiState.lateFeeRule) },
+                        dailyReminders = uiState.dailyReminders, onDailyRemindersChange = { viewModel.updateSettings(acceptCash = uiState.acceptCash, acceptUpi = uiState.acceptUpi, acceptBank = uiState.acceptBank, dailyReminders = it, overdueAlerts = uiState.overdueAlerts, defaultCycle = uiState.defaultCycle, appLockEnabled = uiState.appLockEnabled, lateFeeRule = uiState.lateFeeRule) },
+                        overdueAlerts = uiState.overdueAlerts, onOverdueAlertsChange = { viewModel.updateSettings(acceptCash = uiState.acceptCash, acceptUpi = uiState.acceptUpi, acceptBank = uiState.acceptBank, dailyReminders = uiState.dailyReminders, overdueAlerts = it, defaultCycle = uiState.defaultCycle, appLockEnabled = uiState.appLockEnabled, lateFeeRule = uiState.lateFeeRule) },
+                        defaultCycle = uiState.defaultCycle, onDefaultCycleChange = { viewModel.updateSettings(acceptCash = uiState.acceptCash, acceptUpi = uiState.acceptUpi, acceptBank = uiState.acceptBank, dailyReminders = uiState.dailyReminders, overdueAlerts = uiState.overdueAlerts, defaultCycle = it, appLockEnabled = uiState.appLockEnabled, lateFeeRule = uiState.lateFeeRule) },
+                        appLockEnabled = uiState.appLockEnabled, onAppLockChange = { viewModel.updateSettings(acceptCash = uiState.acceptCash, acceptUpi = uiState.acceptUpi, acceptBank = uiState.acceptBank, dailyReminders = uiState.dailyReminders, overdueAlerts = uiState.overdueAlerts, defaultCycle = uiState.defaultCycle, appLockEnabled = it, lateFeeRule = uiState.lateFeeRule) },
+                        lateFeeRule = uiState.lateFeeRule, onLateFeeRuleChange = { viewModel.updateSettings(acceptCash = uiState.acceptCash, acceptUpi = uiState.acceptUpi, acceptBank = uiState.acceptBank, dailyReminders = uiState.dailyReminders, overdueAlerts = uiState.overdueAlerts, defaultCycle = uiState.defaultCycle, appLockEnabled = uiState.appLockEnabled, lateFeeRule = it) },
+                        onSave = { },
                         onOpenProfile = { go(Screen.Profile) },
-                        onExportData = { toast = "Collection data exported successfully." },
-                        onLogOut = { resetTo(Screen.Welcome) },
-                        onResetData = {
-                            customers.clear()
-                            payments.clear()
-                            toast = "All customer and payment records cleared."
-                        }
+                        onExportData = { },
+                        onLogOut = {
+                            viewModel.logout {
+                                resetTo(Screen.Welcome)
+                            }
+                        },
+                        onResetData = { viewModel.clearData() }
                     )
                 }
             }

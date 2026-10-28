@@ -19,7 +19,8 @@ fun DashboardPage(
     customers: List<Customer>, payments: List<String>, onCategories: () -> Unit,
     onSearch: () -> Unit, onReports: () -> Unit,
     onNotifications: () -> Unit, onSettings: () -> Unit,
-    onDaily: () -> Unit, onWeekly: () -> Unit, onMonthly: () -> Unit
+    onDaily: () -> Unit, onWeekly: () -> Unit, onMonthly: () -> Unit,
+    onRefresh: () -> Unit = {}
 ) {
     val outstanding = customers.sumOf { it.due }
     val collected = customers.sumOf { it.paid }
@@ -30,6 +31,7 @@ fun DashboardPage(
                     Text("Dashboard", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Navy)
                     Text("Good morning · Your collection book", fontSize = 12.sp, color = Muted)
                 }
+                IconButton(onClick = onRefresh) { Icon(Icons.Default.Refresh, "Sync from MySQL") }
                 IconButton(onClick = onNotifications) { Icon(Icons.Default.NotificationsNone, "Notifications") }
                 IconButton(onClick = onSettings) { Icon(Icons.Default.Settings, "Settings") }
             }

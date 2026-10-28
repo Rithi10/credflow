@@ -136,7 +136,7 @@ fun SettingsPage(
             }
         }
 
-        // Data Backup & Export
+        // Data Backup & Control
         item {
             Surface(
                 color = Color.White,
@@ -281,7 +281,7 @@ fun SettingsPage(
         AlertDialog(
             onDismissRequest = { showResetDialog = false },
             title = { Text("Clear All App Data?", fontWeight = FontWeight.Bold, color = Color.Red) },
-            text = { Text("This will permanently remove all customers and collection records. Are you sure?") },
+            text = { Text("This will permanently remove all cached customers and collection records on this device. Are you sure?") },
             confirmButton = {
                 Button(
                     onClick = {
