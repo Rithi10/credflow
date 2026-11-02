@@ -1,10 +1,15 @@
 package com.example.credflow
 
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -27,18 +32,49 @@ import androidx.lifecycle.ViewModelProvider
 import com.example.credflow.di.AppContainer
 import com.example.credflow.domain.model.Customer
 import com.example.credflow.ui.viewmodel.CredflowViewModel
+import com.example.credflow.util.CollectionBookExporter
+import com.example.credflow.util.NotificationHelper
+import com.example.credflow.worker.ReminderScheduler
+
+private const val ACCESS_LOCAL_NETWORK_PERMISSION = "android.permission.ACCESS_LOCAL_NETWORK"
+private const val ANDROID_17_API_LEVEL = 37
 
 class MainActivity : ComponentActivity() {
+    private val localNetworkPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (!isGranted) {
+            Toast.makeText(
+                this,
+                "Local network access is needed to connect to Credflow's XAMPP backend for sign-in and data sync. Enable it in App permissions to use these features.",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+        showCredflowApp()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
-        setContent { CredflowApp() }
+
+        if (BuildConfig.DEBUG
+            && Build.VERSION.SDK_INT >= ANDROID_17_API_LEVEL
+            && checkSelfPermission(ACCESS_LOCAL_NETWORK_PERMISSION) != PackageManager.PERMISSION_GRANTED
+        ) {
+            localNetworkPermissionLauncher.launch(ACCESS_LOCAL_NETWORK_PERMISSION)
+        } else {
+            showCredflowApp()
+        }
+    }
+
+    private fun showCredflowApp() {
+        setContent { CredflowApp(intent) }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun CredflowApp() {
+fun CredflowApp(intent: android.content.Intent? = null) {
     val context = LocalContext.current
     val appContainer = remember { AppContainer(context.applicationContext) }
     val viewModel: CredflowViewModel = remember {
@@ -47,26 +83,36 @@ fun CredflowApp() {
             CredflowViewModel.provideFactory(
                 repository = appContainer.repository,
                 sessionManager = appContainer.sessionManager,
-                apiService = appContainer.apiService
+                apiService = appContainer.apiService,
+                appSettings = appContainer.appSettings
             )
         )[CredflowViewModel::class.java]
     }
     val uiState by viewModel.uiState.collectAsState()
+    val installments by viewModel.installments.collectAsState()
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { _ -> }
+
+    LaunchedEffect(Unit) {
+        NotificationHelper.createNotificationChannels(context)
+        if (appContainer.appSettings.dailyReminders) {
+            ReminderScheduler.scheduleDailyReminder(
+                context,
+                appContainer.appSettings.reminderHour,
+                appContainer.appSettings.reminderMinute
+            )
+        }
+        if (appContainer.appSettings.overdueAlerts) {
+            ReminderScheduler.scheduleOverdueAlerts(context)
+        }
+    }
 
     val backStack = remember {
         mutableStateListOf(if (appContainer.sessionManager.isLoggedIn) Screen.Dashboard else Screen.Splash)
     }
     val screen = backStack.lastOrNull() ?: Screen.Splash
-
-    var chatQuestion by remember { mutableStateOf("") }
-    var name by remember { mutableStateOf("") }
-    var phone by remember { mutableStateOf("") }
-    var amount by remember { mutableStateOf("") }
-    var cycle by remember { mutableStateOf("Daily") }
-    var day by remember { mutableStateOf("Monday") }
-    var note by remember { mutableStateOf("") }
-    var paymentAmount by remember { mutableStateOf("") }
-    var paymentMethod by remember { mutableStateOf("Cash") }
 
     fun go(target: Screen) {
         if (backStack.lastOrNull() != target) {
@@ -99,10 +145,58 @@ fun CredflowApp() {
             }
         }
     }
+
+    LaunchedEffect(intent, uiState.customers) {
+        val targetScreen = intent?.getStringExtra(NotificationHelper.EXTRA_TARGET_SCREEN)
+        val targetCustomerId = intent?.getIntExtra(NotificationHelper.EXTRA_CUSTOMER_ID, 0) ?: 0
+
+        if (targetScreen == "CustomerDetails" && targetCustomerId > 0 && uiState.customers.isNotEmpty()) {
+            val customer = uiState.customers.find { it.id == targetCustomerId }
+            if (customer != null) {
+                viewModel.selectCustomer(customer)
+                go(when (customer.cycle) {
+                    "Daily" -> Screen.DailyDetails
+                    "Weekly" -> Screen.WeeklyOverview
+                    else -> Screen.MonthlyDetails
+                })
+            }
+        } else if (targetScreen == "DailyCustomers") {
+            go(Screen.DailyCustomers)
+        }
+    }
+
+    var chatQuestion by remember { mutableStateOf("") }
+    var name by remember { mutableStateOf("") }
+    var phone by remember { mutableStateOf("") }
+    var amount by remember { mutableStateOf("") }
+    var interest by remember { mutableStateOf("10") }
+    var interestType by remember { mutableStateOf("Flat Interest") }
+    var period by remember { mutableStateOf("10") }
+    var periodUnit by remember { mutableStateOf("Weeks") }
+    var firstDueDate by remember { mutableStateOf("") }
+    var cycle by remember { mutableStateOf("Daily") }
+    var day by remember { mutableStateOf("Monday") }
+    var note by remember { mutableStateOf("") }
+    var paymentAmount by remember { mutableStateOf("") }
+    var paymentMethod by remember { mutableStateOf("Cash") }
+
     fun openAdd(which: String) {
         name = ""; phone = ""; amount = ""; note = ""
         cycle = which
         day = "Monday"
+        interest = "10"
+        interestType = "Flat Interest"
+        period = when (which) {
+            "Daily" -> "30"
+            "Weekly" -> "10"
+            else -> "6"
+        }
+        periodUnit = when (which) {
+            "Daily" -> "Days"
+            "Weekly" -> "Weeks"
+            else -> "Months"
+        }
+        firstDueDate = ""
         go(when (which) {
             "Daily" -> Screen.AddDaily
             "Weekly" -> Screen.AddWeekly
@@ -114,8 +208,13 @@ fun CredflowApp() {
             name = name,
             phone = phone,
             amountStr = amount,
+            interestStr = interest,
+            interestType = interestType,
+            periodStr = period,
+            periodUnit = periodUnit,
             cycle = cycle,
             day = day,
+            firstDueDate = firstDueDate,
             note = note,
             onSuccess = { savedCustomer ->
                 val targetScreen = when (savedCustomer.cycle) {
@@ -242,6 +341,15 @@ fun CredflowApp() {
                         onGoogleSignInToken = { idToken ->
                             viewModel.googleSignInWithToken(idToken) { resetTo(Screen.Dashboard) }
                         },
+                        onRequestResetOtp = { idVal, onComplete ->
+                            viewModel.requestResetOtp(idVal, onComplete)
+                        },
+                        onVerifyResetOtp = { idVal, otpVal, onComplete ->
+                            viewModel.verifyResetOtp(idVal, otpVal, onComplete)
+                        },
+                        onResetPassword = { tokenVal, newPassVal, onComplete ->
+                            viewModel.resetPassword(tokenVal, newPassVal, onComplete)
+                        },
                         isLoading = uiState.isAuthenticating,
                         authError = uiState.authError,
                         onClearError = { viewModel.clearAuthError() }
@@ -296,15 +404,22 @@ fun CredflowApp() {
                     }
                     Screen.AddDaily, Screen.AddWeekly, Screen.AddMonthly -> AddCustomerPage(
                         cycle = cycle,
+                        onCycleChange = { cycle = it },
                         name = name, onName = { name = it },
                         phone = phone, onPhone = { phone = it },
                         amount = amount, onAmount = { amount = it },
+                        interest = interest, onInterest = { interest = it },
+                        interestType = interestType, onInterestType = { interestType = it },
+                        period = period, onPeriod = { period = it },
+                        periodUnit = periodUnit, onPeriodUnit = { periodUnit = it },
                         day = day, onDay = { day = it },
+                        firstDueDate = firstDueDate, onFirstDueDate = { firstDueDate = it },
                         note = note, onNote = { note = it },
                         onSave = { saveCustomer() }
                     )
                     Screen.DailyDetails, Screen.MonthlyDetails, Screen.WeeklyOverview -> CustomerDetailsPage(
                         customer = uiState.selectedCustomer,
+                        installments = installments,
                         onCollect = {
                             if (uiState.selectedCustomer != null) {
                                 paymentAmount = ""
@@ -417,23 +532,77 @@ fun CredflowApp() {
                         onOpenSettings = { go(Screen.Settings) }
                     )
                     Screen.Settings -> SettingsPage(
-                        acceptCash = uiState.acceptCash, onAcceptCashChange = { viewModel.updateSettings(acceptCash = it, acceptUpi = uiState.acceptUpi, acceptBank = uiState.acceptBank, dailyReminders = uiState.dailyReminders, overdueAlerts = uiState.overdueAlerts, defaultCycle = uiState.defaultCycle, appLockEnabled = uiState.appLockEnabled, lateFeeRule = uiState.lateFeeRule) },
-                        acceptUpi = uiState.acceptUpi, onAcceptUpiChange = { viewModel.updateSettings(acceptCash = uiState.acceptCash, acceptUpi = it, acceptBank = uiState.acceptBank, dailyReminders = uiState.dailyReminders, overdueAlerts = uiState.overdueAlerts, defaultCycle = uiState.defaultCycle, appLockEnabled = uiState.appLockEnabled, lateFeeRule = uiState.lateFeeRule) },
-                        acceptBank = uiState.acceptBank, onAcceptBankChange = { viewModel.updateSettings(acceptCash = uiState.acceptCash, acceptUpi = uiState.acceptUpi, acceptBank = it, dailyReminders = uiState.dailyReminders, overdueAlerts = uiState.overdueAlerts, defaultCycle = uiState.defaultCycle, appLockEnabled = uiState.appLockEnabled, lateFeeRule = uiState.lateFeeRule) },
-                        dailyReminders = uiState.dailyReminders, onDailyRemindersChange = { viewModel.updateSettings(acceptCash = uiState.acceptCash, acceptUpi = uiState.acceptUpi, acceptBank = uiState.acceptBank, dailyReminders = it, overdueAlerts = uiState.overdueAlerts, defaultCycle = uiState.defaultCycle, appLockEnabled = uiState.appLockEnabled, lateFeeRule = uiState.lateFeeRule) },
-                        overdueAlerts = uiState.overdueAlerts, onOverdueAlertsChange = { viewModel.updateSettings(acceptCash = uiState.acceptCash, acceptUpi = uiState.acceptUpi, acceptBank = uiState.acceptBank, dailyReminders = uiState.dailyReminders, overdueAlerts = it, defaultCycle = uiState.defaultCycle, appLockEnabled = uiState.appLockEnabled, lateFeeRule = uiState.lateFeeRule) },
-                        defaultCycle = uiState.defaultCycle, onDefaultCycleChange = { viewModel.updateSettings(acceptCash = uiState.acceptCash, acceptUpi = uiState.acceptUpi, acceptBank = uiState.acceptBank, dailyReminders = uiState.dailyReminders, overdueAlerts = uiState.overdueAlerts, defaultCycle = it, appLockEnabled = uiState.appLockEnabled, lateFeeRule = uiState.lateFeeRule) },
-                        appLockEnabled = uiState.appLockEnabled, onAppLockChange = { viewModel.updateSettings(acceptCash = uiState.acceptCash, acceptUpi = uiState.acceptUpi, acceptBank = uiState.acceptBank, dailyReminders = uiState.dailyReminders, overdueAlerts = uiState.overdueAlerts, defaultCycle = uiState.defaultCycle, appLockEnabled = it, lateFeeRule = uiState.lateFeeRule) },
-                        lateFeeRule = uiState.lateFeeRule, onLateFeeRuleChange = { viewModel.updateSettings(acceptCash = uiState.acceptCash, acceptUpi = uiState.acceptUpi, acceptBank = uiState.acceptBank, dailyReminders = uiState.dailyReminders, overdueAlerts = uiState.overdueAlerts, defaultCycle = uiState.defaultCycle, appLockEnabled = uiState.appLockEnabled, lateFeeRule = it) },
+                        acceptCash = uiState.acceptCash,
+                        onAcceptCashChange = { viewModel.updateSettings(acceptCash = it, acceptUpi = uiState.acceptUpi, acceptBank = uiState.acceptBank, dailyReminders = uiState.dailyReminders, overdueAlerts = uiState.overdueAlerts, defaultCycle = uiState.defaultCycle, appLockEnabled = uiState.appLockEnabled, lateFeeRule = uiState.lateFeeRule) },
+                        acceptUpi = uiState.acceptUpi,
+                        onAcceptUpiChange = { viewModel.updateSettings(acceptCash = uiState.acceptCash, acceptUpi = it, acceptBank = uiState.acceptBank, dailyReminders = uiState.dailyReminders, overdueAlerts = uiState.overdueAlerts, defaultCycle = uiState.defaultCycle, appLockEnabled = uiState.appLockEnabled, lateFeeRule = uiState.lateFeeRule) },
+                        acceptBank = uiState.acceptBank,
+                        onAcceptBankChange = { viewModel.updateSettings(acceptCash = uiState.acceptCash, acceptUpi = uiState.acceptUpi, acceptBank = it, dailyReminders = uiState.dailyReminders, overdueAlerts = uiState.overdueAlerts, defaultCycle = uiState.defaultCycle, appLockEnabled = uiState.appLockEnabled, lateFeeRule = uiState.lateFeeRule) },
+                        dailyReminders = uiState.dailyReminders,
+                        onDailyRemindersChange = { enabled ->
+                            if (enabled) {
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !NotificationHelper.hasNotificationPermission(context)) {
+                                    permissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                                }
+                                ReminderScheduler.scheduleDailyReminder(context, uiState.reminderHour, uiState.reminderMinute)
+                            } else {
+                                ReminderScheduler.cancelDailyReminder(context)
+                            }
+                            viewModel.updateSettings(acceptCash = uiState.acceptCash, acceptUpi = uiState.acceptUpi, acceptBank = uiState.acceptBank, dailyReminders = enabled, overdueAlerts = uiState.overdueAlerts, defaultCycle = uiState.defaultCycle, appLockEnabled = uiState.appLockEnabled, lateFeeRule = uiState.lateFeeRule)
+                        },
+                        reminderHour = uiState.reminderHour,
+                        reminderMinute = uiState.reminderMinute,
+                        onReminderTimeChange = { h, m ->
+                            viewModel.updateSettings(acceptCash = uiState.acceptCash, acceptUpi = uiState.acceptUpi, acceptBank = uiState.acceptBank, dailyReminders = uiState.dailyReminders, overdueAlerts = uiState.overdueAlerts, defaultCycle = uiState.defaultCycle, appLockEnabled = uiState.appLockEnabled, lateFeeRule = uiState.lateFeeRule, reminderHour = h, reminderMinute = m)
+                            if (uiState.dailyReminders) {
+                                ReminderScheduler.scheduleDailyReminder(context, h, m)
+                            }
+                        },
+                        overdueAlerts = uiState.overdueAlerts,
+                        onOverdueAlertsChange = { enabled ->
+                            if (enabled) {
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !NotificationHelper.hasNotificationPermission(context)) {
+                                    permissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                                }
+                                ReminderScheduler.scheduleOverdueAlerts(context)
+                            } else {
+                                ReminderScheduler.cancelOverdueAlerts(context)
+                            }
+                            viewModel.updateSettings(acceptCash = uiState.acceptCash, acceptUpi = uiState.acceptUpi, acceptBank = uiState.acceptBank, dailyReminders = uiState.dailyReminders, overdueAlerts = enabled, defaultCycle = uiState.defaultCycle, appLockEnabled = uiState.appLockEnabled, lateFeeRule = uiState.lateFeeRule)
+                        },
+                        defaultCycle = uiState.defaultCycle,
+                        onDefaultCycleChange = { viewModel.updateSettings(acceptCash = uiState.acceptCash, acceptUpi = uiState.acceptUpi, acceptBank = uiState.acceptBank, dailyReminders = uiState.dailyReminders, overdueAlerts = uiState.overdueAlerts, defaultCycle = it, appLockEnabled = uiState.appLockEnabled, lateFeeRule = uiState.lateFeeRule) },
+                        appLockEnabled = uiState.appLockEnabled,
+                        onAppLockChange = { viewModel.updateSettings(acceptCash = uiState.acceptCash, acceptUpi = uiState.acceptUpi, acceptBank = uiState.acceptBank, dailyReminders = uiState.dailyReminders, overdueAlerts = uiState.overdueAlerts, defaultCycle = uiState.defaultCycle, appLockEnabled = it, lateFeeRule = uiState.lateFeeRule) },
+                        lateFeeRule = uiState.lateFeeRule,
+                        onLateFeeRuleChange = { viewModel.updateSettings(acceptCash = uiState.acceptCash, acceptUpi = uiState.acceptUpi, acceptBank = uiState.acceptBank, dailyReminders = uiState.dailyReminders, overdueAlerts = uiState.overdueAlerts, defaultCycle = uiState.defaultCycle, appLockEnabled = uiState.appLockEnabled, lateFeeRule = it) },
                         onSave = { },
                         onOpenProfile = { go(Screen.Profile) },
-                        onExportData = { },
+                        onExportData = {
+                            viewModel.prepareDataForExport { custs, pmts ->
+                                val res = CollectionBookExporter.exportAndSave(context, custs, pmts)
+                                res.onSuccess { export ->
+                                    try {
+                                        context.startActivity(export.shareIntent)
+                                    } catch (_: Exception) {
+                                        context.startActivity(export.viewIntent)
+                                    }
+                                }
+                            }
+                        },
                         onLogOut = {
                             viewModel.logout {
                                 resetTo(Screen.Welcome)
                             }
                         },
-                        onResetData = { viewModel.clearData() }
+                        onResetData = { viewModel.clearData() },
+                        onDeleteServerData = {
+                            viewModel.resetServerData { res ->
+                                res.onSuccess {
+                                    resetTo(Screen.Dashboard)
+                                }
+                            }
+                        }
                     )
                 }
             }

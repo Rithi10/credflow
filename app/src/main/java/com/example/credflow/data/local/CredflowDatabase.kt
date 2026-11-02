@@ -7,7 +7,7 @@ import androidx.room.RoomDatabase
 
 @Database(
     entities = [CustomerEntity::class, PaymentEntity::class, PendingOperationEntity::class],
-    version = 2,
+    version = 4,
     exportSchema = false
 )
 abstract class CredflowDatabase : RoomDatabase() {

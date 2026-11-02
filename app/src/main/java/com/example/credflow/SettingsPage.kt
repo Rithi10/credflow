@@ -23,6 +23,9 @@ fun SettingsPage(
     acceptBank: Boolean, onAcceptBankChange: (Boolean) -> Unit,
     dailyReminders: Boolean, onDailyRemindersChange: (Boolean) -> Unit,
     overdueAlerts: Boolean, onOverdueAlertsChange: (Boolean) -> Unit,
+    reminderHour: Int = 9,
+    reminderMinute: Int = 0,
+    onReminderTimeChange: (Int, Int) -> Unit = { _, _ -> },
     defaultCycle: String, onDefaultCycleChange: (String) -> Unit,
     appLockEnabled: Boolean, onAppLockChange: (Boolean) -> Unit,
     lateFeeRule: String, onLateFeeRuleChange: (String) -> Unit,
@@ -30,11 +33,15 @@ fun SettingsPage(
     onOpenProfile: () -> Unit,
     onExportData: () -> Unit,
     onLogOut: () -> Unit,
-    onResetData: () -> Unit
+    onResetData: () -> Unit,
+    onDeleteServerData: () -> Unit = {}
 ) {
     var showPasswordDialog by remember { mutableStateOf(false) }
-    var showResetDialog by remember { mutableStateOf(false) }
+    var showClearCacheDialog by remember { mutableStateOf(false) }
+    var showDeleteServerDialog by remember { mutableStateOf(false) }
     var showLogoutDialog by remember { mutableStateOf(false) }
+    var deleteConfirmText by remember { mutableStateOf("") }
+    val context = androidx.compose.ui.platform.LocalContext.current
 
     LazyColumn(
         Modifier.fillMaxSize().padding(horizontal = 20.dp),
@@ -108,6 +115,41 @@ fun SettingsPage(
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("Notifications & Reminders", fontWeight = FontWeight.Bold, color = Navy, fontSize = 16.sp)
                     SwitchRow("Daily Collection Reminders", dailyReminders, onDailyRemindersChange)
+                    if (dailyReminders) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text("Reminder Time", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Navy)
+                                val formattedTime = String.format(
+                                    "%02d:%02d %s",
+                                    if (reminderHour % 12 == 0) 12 else reminderHour % 12,
+                                    reminderMinute,
+                                    if (reminderHour >= 12) "PM" else "AM"
+                                )
+                                Text(formattedTime, fontSize = 12.sp, color = Blue)
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    android.app.TimePickerDialog(
+                                        context,
+                                        { _, h, m -> onReminderTimeChange(h, m) },
+                                        reminderHour,
+                                        reminderMinute,
+                                        false
+                                    ).show()
+                                },
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                            ) {
+                                Icon(Icons.Default.Schedule, null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("Change Time", fontSize = 12.sp)
+                            }
+                        }
+                    }
+                    HorizontalDivider(color = Border, thickness = 0.5.dp)
                     SwitchRow("Overdue Customer Alerts", overdueAlerts, onOverdueAlertsChange)
                 }
             }
@@ -155,13 +197,25 @@ fun SettingsPage(
                         Text("Export Collection Book (CSV/Excel)")
                     }
                     OutlinedButton(
-                        onClick = { showResetDialog = true },
+                        onClick = { showClearCacheDialog = true },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Navy)
+                    ) {
+                        Icon(Icons.Default.Refresh, null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Clear Local Cache (Device Only)")
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            deleteConfirmText = ""
+                            showDeleteServerDialog = true
+                        },
                         modifier = Modifier.fillMaxWidth(),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.Red)
                     ) {
-                        Icon(Icons.Default.Delete, null)
+                        Icon(Icons.Default.DeleteForever, null)
                         Spacer(Modifier.width(8.dp))
-                        Text("Clear All App Data")
+                        Text("Delete All Account Data (Server & Device)")
                     }
                 }
             }
@@ -276,23 +330,60 @@ fun SettingsPage(
         )
     }
 
-    // Reset Data Dialog
-    if (showResetDialog) {
+    // Clear Local Cache Confirmation Dialog
+    if (showClearCacheDialog) {
         AlertDialog(
-            onDismissRequest = { showResetDialog = false },
-            title = { Text("Clear All App Data?", fontWeight = FontWeight.Bold, color = Color.Red) },
-            text = { Text("This will permanently remove all cached customers and collection records on this device. Are you sure?") },
+            onDismissRequest = { showClearCacheDialog = false },
+            title = { Text("Clear Local Cache?", fontWeight = FontWeight.Bold) },
+            text = { Text("This will clear cached customer and collection records on this device. Your records stored on the server will NOT be deleted and will reload upon your next sync.") },
             confirmButton = {
                 Button(
                     onClick = {
-                        showResetDialog = false
+                        showClearCacheDialog = false
                         onResetData()
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color.Red)
-                ) { Text("Reset Data") }
+                    }
+                ) { Text("Clear Cache") }
             },
             dismissButton = {
-                TextButton(onClick = { showResetDialog = false }) { Text("Cancel") }
+                TextButton(onClick = { showClearCacheDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    // Permanent Server Delete Confirmation Dialog
+    if (showDeleteServerDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteServerDialog = false },
+            title = { Text("Permanently Delete Server Data?", fontWeight = FontWeight.Bold, color = Color.Red) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "DANGER: This action is permanent and cannot be undone. All your loan customers, payment transactions, and collection history will be deleted from the MySQL database and this device.",
+                        color = Color(0xFFC62828),
+                        fontSize = 13.sp
+                    )
+                    Text("Type DELETE in capital letters to confirm:", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                    OutlinedTextField(
+                        value = deleteConfirmText,
+                        onValueChange = { deleteConfirmText = it },
+                        singleLine = true,
+                        placeholder = { Text("DELETE") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showDeleteServerDialog = false
+                        onDeleteServerData()
+                    },
+                    enabled = deleteConfirmText.trim() == "DELETE",
+                    colors = ButtonDefaults.buttonColors(containerColor = Color.Red)
+                ) { Text("Delete Everything") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteServerDialog = false }) { Text("Cancel") }
             }
         )
     }

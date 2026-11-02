@@ -86,9 +86,15 @@ class CredflowRepositoryImpl(
             phone = customer.phone,
             amount = customer.amount,
             interest = customer.interest,
+            interestType = customer.interestType,
+            period = customer.period,
+            periodUnit = customer.periodUnit,
             cycle = customer.cycle,
             collectionDay = customer.day,
             totalDue = customer.totalDue,
+            installmentAmount = customer.installmentAmount,
+            totalInstallments = customer.totalInstallments,
+            firstDueDate = customer.firstDueDate,
             note = customer.note
         )
 
@@ -189,9 +195,15 @@ class CredflowRepositoryImpl(
                             phone = json.optString("phone"),
                             amount = json.optDouble("amount"),
                             interest = json.optDouble("interest"),
+                            interestType = json.optString("interest_type", "Flat Interest"),
+                            period = json.optInt("period", 1),
+                            periodUnit = json.optString("period_unit", "Months"),
                             cycle = json.optString("cycle"),
                             collectionDay = json.optString("collection_day"),
                             totalDue = json.optDouble("total_due"),
+                            installmentAmount = json.optDouble("installment_amount"),
+                            totalInstallments = json.optInt("total_installments", 1),
+                            firstDueDate = json.optString("first_due_date"),
                             note = json.optString("note")
                         )
                         val res = apiService.addCustomer(dto, sessionManager.authToken)

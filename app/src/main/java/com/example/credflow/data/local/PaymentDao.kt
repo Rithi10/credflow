@@ -11,6 +11,9 @@ interface PaymentDao {
     @Query("SELECT * FROM payments ORDER BY id DESC")
     fun getAllPayments(): Flow<List<PaymentEntity>>
 
+    @Query("SELECT * FROM payments ORDER BY id DESC")
+    suspend fun getAllPaymentsList(): List<PaymentEntity>
+
     @Query("SELECT * FROM payments WHERE customerId = :customerId ORDER BY id DESC")
     fun getPaymentsForCustomer(customerId: Int): Flow<List<PaymentEntity>>
 

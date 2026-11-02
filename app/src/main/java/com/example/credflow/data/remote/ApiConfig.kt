@@ -1,18 +1,33 @@
 package com.example.credflow.data.remote
 
+import com.example.credflow.BuildConfig
+
 object ApiConfig {
     // Physical device on local Wi-Fi:
     const val DEFAULT_BASE_URL = "http://172.23.176.211/credflow_api/"
     // Android Studio Emulator on host PC:
     const val EMULATOR_BASE_URL = "http://10.0.2.2/credflow_api/"
 
-    private var currentUrl: String = DEFAULT_BASE_URL
+    private var currentUrl: String = normalizeBaseUrl(DEFAULT_BASE_URL)
 
     var baseUrl: String
         get() = currentUrl
         set(value) {
-            currentUrl = if (value.endsWith("/")) value else "$value/"
+            currentUrl = normalizeBaseUrl(value)
         }
+
+    private fun normalizeBaseUrl(value: String): String {
+        val normalized = if (value.endsWith("/")) value else "$value/"
+        if (BuildConfig.DEBUG || normalized.startsWith("https://", ignoreCase = true)) {
+            return normalized
+        }
+
+        if (normalized.startsWith("http://", ignoreCase = true)) {
+            return normalized.replaceFirst(Regex("^http://", RegexOption.IGNORE_CASE), "https://")
+        }
+
+        throw IllegalArgumentException("Production API URLs must use HTTPS.")
+    }
 
     /**
      * GOOGLE OAUTH 2.0 WEB CLIENT ID
@@ -28,7 +43,7 @@ object ApiConfig {
      * 2. Find or create an OAuth 2.0 Client ID with Application type: "Web application"
      * 3. Paste the Client ID inside the quotes below:
      */
-    const val GOOGLE_WEB_CLIENT_ID: String = "930439631272-lnldoa0kadaf90sanvnab803v8vb75nm.apps.googleusercontent.com"
+    const val GOOGLE_WEB_CLIENT_ID: String = "930439631272-nt9uc5fe4cvks0utc7off579ri6l8sj3.apps.googleusercontent.com"
 
     // Backward-compatible alias
     var googleWebClientId: String

@@ -1,5 +1,6 @@
 package com.example.credflow
 
+import android.util.Log
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -16,6 +17,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.credentials.CredentialManager
@@ -23,10 +25,11 @@ import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialCancellationException
 import androidx.credentials.exceptions.GetCredentialException
 import com.example.credflow.data.remote.ApiConfig
-import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import kotlinx.coroutines.launch
+
+private const val GOOGLE_AUTH_LOG_TAG = "CredflowGoogleAuth"
 
 @Composable
 fun LoginPage(
@@ -34,6 +37,9 @@ fun LoginPage(
     onLogin: (String, String) -> Unit,
     onSignUp: (String, String, String, String) -> Unit,
     onGoogleSignInToken: (String) -> Unit,
+    onRequestResetOtp: (String, (Result<String>) -> Unit) -> Unit = { _, _ -> },
+    onVerifyResetOtp: (String, String, (Result<String>) -> Unit) -> Unit = { _, _, _ -> },
+    onResetPassword: (String, String, (Result<String>) -> Unit) -> Unit = { _, _, _ -> },
     isLoading: Boolean = false,
     authError: String? = null,
     onClearError: () -> Unit = {}
@@ -67,15 +73,8 @@ fun LoginPage(
                 val signInWithGoogleOption = GetSignInWithGoogleOption.Builder(serverClientId = clientId)
                     .build()
 
-                val googleIdOption = GetGoogleIdOption.Builder()
-                    .setFilterByAuthorizedAccounts(false)
-                    .setServerClientId(clientId)
-                    .setAutoSelectEnabled(false)
-                    .build()
-
                 val request = GetCredentialRequest.Builder()
                     .addCredentialOption(signInWithGoogleOption)
-                    .addCredentialOption(googleIdOption)
                     .build()
 
                 val response = credentialManager.getCredential(request = request, context = context)
@@ -92,12 +91,14 @@ fun LoginPage(
                 // User dismissed or tapped outside the account chooser
             } catch (e: GetCredentialException) {
                 val msg = e.message ?: ""
+                Log.e(GOOGLE_AUTH_LOG_TAG, "Credential Manager failed (${e.javaClass.simpleName}): $msg")
                 localError = if (msg.contains("No credentials available", ignoreCase = true)) {
                     "Google Sign-In: No credentials available. Please ensure your Android OAuth Client ID (SHA-1) is registered in Google Cloud Console."
                 } else {
                     "Google Sign-In: $msg"
                 }
             } catch (e: Exception) {
+                Log.e(GOOGLE_AUTH_LOG_TAG, "Unexpected Google sign-in failure (${e.javaClass.simpleName})", e)
                 localError = "Google Sign-In: ${e.message ?: "Could not open Google account picker."}"
             } finally {
                 isGoogleLoading = false
@@ -312,40 +313,326 @@ fun LoginPage(
     }
 
     if (showForgotPasswordDialog) {
-        var resetEmail by remember { mutableStateOf(identity) }
-        var resetSent by remember { mutableStateOf(false) }
+        var resetStep by remember { mutableStateOf(1) } // 1: Request OTP, 2: Verify OTP, 3: New Password, 4: Success
+        var resetIdentity by remember { mutableStateOf(identity) }
+        var otpInput by remember { mutableStateOf("") }
+        var newPasswordInput by remember { mutableStateOf("") }
+        var confirmPasswordInput by remember { mutableStateOf("") }
+        var showNewPass by remember { mutableStateOf(false) }
+        var showConfirmPass by remember { mutableStateOf(false) }
+        var resetToken by remember { mutableStateOf("") }
+        var dialogError by remember { mutableStateOf<String?>(null) }
+        var infoMessage by remember { mutableStateOf<String?>(null) }
+        var isSubmitting by remember { mutableStateOf(false) }
 
         AlertDialog(
-            onDismissRequest = { showForgotPasswordDialog = false },
-            title = { Text("Reset Password", fontWeight = FontWeight.Bold) },
+            onDismissRequest = {
+                if (!isSubmitting) {
+                    showForgotPasswordDialog = false
+                }
+            },
+            title = {
+                Text(
+                    when (resetStep) {
+                        1 -> "Reset Password"
+                        2 -> "Verify Code"
+                        3 -> "Set New Password"
+                        else -> "Password Reset Successful"
+                    },
+                    fontWeight = FontWeight.Bold
+                )
+            },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    if (resetSent) {
-                        Text("A password reset request has been logged for $resetEmail.", color = Green)
-                    } else {
-                        Text("Enter your registered email or mobile number to receive password recovery instructions.")
-                        OutlinedTextField(
-                            value = resetEmail,
-                            onValueChange = { resetEmail = it },
-                            label = { Text("Email or Mobile Number") },
-                            singleLine = true,
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    if (!dialogError.isNullOrBlank()) {
+                        Surface(
+                            color = Color(0xFFFFEBEE),
+                            shape = RoundedCornerShape(8.dp),
                             modifier = Modifier.fillMaxWidth()
-                        )
+                        ) {
+                            Text(
+                                text = dialogError ?: "",
+                                color = Color(0xFFC62828),
+                                fontSize = 12.sp,
+                                modifier = Modifier.padding(10.dp)
+                            )
+                        }
+                    }
+
+                    if (!infoMessage.isNullOrBlank()) {
+                        Surface(
+                            color = Color(0xFFE8F5E9),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = infoMessage ?: "",
+                                color = Color(0xFF2E7D32),
+                                fontSize = 12.sp,
+                                modifier = Modifier.padding(10.dp)
+                            )
+                        }
+                    }
+
+                    when (resetStep) {
+                        1 -> {
+                            Text(
+                                "Enter your registered mobile number or email address. We will verify your identity with a secure one-time verification code.",
+                                fontSize = 13.sp,
+                                color = Navy
+                            )
+                            OutlinedTextField(
+                                value = resetIdentity,
+                                onValueChange = {
+                                    resetIdentity = it
+                                    dialogError = null
+                                },
+                                label = { Text("Mobile Number or Email *") },
+                                leadingIcon = { Icon(Icons.Default.Phone, null) },
+                                singleLine = true,
+                                enabled = !isSubmitting,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                        2 -> {
+                            Text(
+                                "A 6-digit verification code has been dispatched for $resetIdentity. Please enter it below to confirm your account.",
+                                fontSize = 13.sp,
+                                color = Navy
+                            )
+                            OutlinedTextField(
+                                value = otpInput,
+                                onValueChange = {
+                                    if (it.length <= 6 && it.all { char -> char.isDigit() }) {
+                                        otpInput = it
+                                        dialogError = null
+                                    }
+                                },
+                                label = { Text("6-Digit Verification Code *") },
+                                leadingIcon = { Icon(Icons.Default.Pin, null) },
+                                singleLine = true,
+                                enabled = !isSubmitting,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End
+                            ) {
+                                TextButton(
+                                    onClick = {
+                                        dialogError = null
+                                        isSubmitting = true
+                                        onRequestResetOtp(resetIdentity.trim()) { res ->
+                                            isSubmitting = false
+                                            res.onSuccess { msg ->
+                                                infoMessage = msg
+                                            }.onFailure { err ->
+                                                dialogError = err.message ?: "Failed to resend code."
+                                            }
+                                        }
+                                    },
+                                    enabled = !isSubmitting
+                                ) {
+                                    Text("Resend Code", fontSize = 12.sp, color = Blue)
+                                }
+                            }
+                        }
+                        3 -> {
+                            Text(
+                                "Identity verified. Enter your new password below (minimum 6 characters).",
+                                fontSize = 13.sp,
+                                color = Navy
+                            )
+                            OutlinedTextField(
+                                value = newPasswordInput,
+                                onValueChange = {
+                                    newPasswordInput = it
+                                    dialogError = null
+                                },
+                                label = { Text("New Password *") },
+                                leadingIcon = { Icon(Icons.Default.Lock, null) },
+                                trailingIcon = {
+                                    IconButton(onClick = { showNewPass = !showNewPass }) {
+                                        Icon(
+                                            if (showNewPass) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                            contentDescription = null
+                                        )
+                                    }
+                                },
+                                visualTransformation = if (showNewPass) VisualTransformation.None else PasswordVisualTransformation(),
+                                singleLine = true,
+                                enabled = !isSubmitting,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            OutlinedTextField(
+                                value = confirmPasswordInput,
+                                onValueChange = {
+                                    confirmPasswordInput = it
+                                    dialogError = null
+                                },
+                                label = { Text("Confirm New Password *") },
+                                leadingIcon = { Icon(Icons.Default.Lock, null) },
+                                trailingIcon = {
+                                    IconButton(onClick = { showConfirmPass = !showConfirmPass }) {
+                                        Icon(
+                                            if (showConfirmPass) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                            contentDescription = null
+                                        )
+                                    }
+                                },
+                                visualTransformation = if (showConfirmPass) VisualTransformation.None else PasswordVisualTransformation(),
+                                singleLine = true,
+                                enabled = !isSubmitting,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                        4 -> {
+                            Column(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.CheckCircle,
+                                    contentDescription = null,
+                                    tint = Color(0xFF2E7D32),
+                                    modifier = Modifier.size(54.dp)
+                                )
+                                Text(
+                                    "Your password has been changed successfully.",
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Navy,
+                                    fontSize = 14.sp
+                                )
+                                Text(
+                                    "All previous active sessions have been signed out for security. You can now log in with your new credentials.",
+                                    fontSize = 12.sp,
+                                    color = Color.Gray
+                                )
+                            }
+                        }
                     }
                 }
             },
             confirmButton = {
-                if (resetSent) {
-                    Button(onClick = { showForgotPasswordDialog = false }) { Text("OK") }
-                } else {
-                    Button(onClick = {
-                        if (resetEmail.isNotBlank()) resetSent = true
-                    }) { Text("Submit") }
+                when (resetStep) {
+                    1 -> {
+                        Button(
+                            onClick = {
+                                if (resetIdentity.isBlank()) {
+                                    dialogError = "Please enter your registered mobile number or email."
+                                    return@Button
+                                }
+                                dialogError = null
+                                isSubmitting = true
+                                onRequestResetOtp(resetIdentity.trim()) { res ->
+                                    isSubmitting = false
+                                    res.onSuccess { msg ->
+                                        resetStep = 2
+                                        infoMessage = msg
+                                    }.onFailure { err ->
+                                        dialogError = err.message ?: "Could not request reset code. Please check connection."
+                                    }
+                                }
+                            },
+                            enabled = !isSubmitting
+                        ) {
+                            if (isSubmitting) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
+                                Spacer(Modifier.width(8.dp))
+                            }
+                            Text("Send Code")
+                        }
+                    }
+                    2 -> {
+                        Button(
+                            onClick = {
+                                if (otpInput.trim().length != 6) {
+                                    dialogError = "Please enter the complete 6-digit verification code."
+                                    return@Button
+                                }
+                                dialogError = null
+                                isSubmitting = true
+                                onVerifyResetOtp(resetIdentity.trim(), otpInput.trim()) { res ->
+                                    isSubmitting = false
+                                    res.onSuccess { token ->
+                                        resetToken = token
+                                        resetStep = 3
+                                        infoMessage = null
+                                    }.onFailure { err ->
+                                        dialogError = err.message ?: "Invalid verification code."
+                                    }
+                                }
+                            },
+                            enabled = !isSubmitting
+                        ) {
+                            if (isSubmitting) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
+                                Spacer(Modifier.width(8.dp))
+                            }
+                            Text("Verify Code")
+                        }
+                    }
+                    3 -> {
+                        Button(
+                            onClick = {
+                                if (newPasswordInput.length < 6) {
+                                    dialogError = "Password must be at least 6 characters."
+                                    return@Button
+                                }
+                                if (newPasswordInput != confirmPasswordInput) {
+                                    dialogError = "Passwords do not match."
+                                    return@Button
+                                }
+                                dialogError = null
+                                isSubmitting = true
+                                onResetPassword(resetToken, newPasswordInput) { res ->
+                                    isSubmitting = false
+                                    res.onSuccess {
+                                        resetStep = 4
+                                        infoMessage = null
+                                        dialogError = null
+                                    }.onFailure { err ->
+                                        dialogError = err.message ?: "Failed to update password."
+                                    }
+                                }
+                            },
+                            enabled = !isSubmitting
+                        ) {
+                            if (isSubmitting) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
+                                Spacer(Modifier.width(8.dp))
+                            }
+                            Text("Update Password")
+                        }
+                    }
+                    4 -> {
+                        Button(onClick = {
+                            identity = resetIdentity.trim()
+                            password = ""
+                            showForgotPasswordDialog = false
+                        }) {
+                            Text("Back to Sign In")
+                        }
+                    }
                 }
             },
             dismissButton = {
-                if (!resetSent) {
-                    TextButton(onClick = { showForgotPasswordDialog = false }) { Text("Cancel") }
+                if (resetStep != 4 && !isSubmitting) {
+                    TextButton(onClick = {
+                        if (resetStep > 1 && resetStep < 4) {
+                            resetStep -= 1
+                            dialogError = null
+                            infoMessage = null
+                        } else {
+                            showForgotPasswordDialog = false
+                        }
+                    }) {
+                        Text(if (resetStep > 1) "Back" else "Cancel")
+                    }
                 }
             }
         )

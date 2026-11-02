@@ -1,5 +1,6 @@
 package com.example.credflow.data.remote
 
+import android.util.Log
 import com.example.credflow.data.remote.dto.AddCustomerRequestDto
 import com.example.credflow.data.remote.dto.AuthResponseDto
 import com.example.credflow.data.remote.dto.CustomerDto
@@ -15,6 +16,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
 import java.util.concurrent.TimeUnit
+
+private const val GOOGLE_AUTH_LOG_TAG = "CredflowGoogleAuth"
 
 class CredflowApiService {
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
@@ -168,6 +171,43 @@ class CredflowApiService {
         }
     }
 
+    suspend fun getInstallments(customerId: Int, authToken: String? = null): Result<List<com.example.credflow.domain.model.InstallmentScheduleItem>> = withContext(Dispatchers.IO) {
+        try {
+            val reqBuilder = Request.Builder()
+                .url(ApiConfig.getEndpoint("get_installments.php?customer_id=$customerId"))
+                .get()
+
+            if (!authToken.isNullOrBlank()) {
+                reqBuilder.addHeader("Authorization", "Bearer $authToken")
+            }
+
+            client.newCall(reqBuilder.build()).execute().use { response ->
+                val responseBody = response.body?.string() ?: ""
+                if (!response.isSuccessful) {
+                    return@withContext Result.failure(IOException("HTTP ${response.code}: $responseBody"))
+                }
+
+                val list = mutableListOf<com.example.credflow.domain.model.InstallmentScheduleItem>()
+                val jsonArray = JSONArray(responseBody)
+                for (i in 0 until jsonArray.length()) {
+                    val obj = jsonArray.getJSONObject(i)
+                    list.add(
+                        com.example.credflow.domain.model.InstallmentScheduleItem(
+                            number = obj.optInt("installment_number", i + 1),
+                            dueDate = obj.optString("due_date", ""),
+                            amount = obj.optDouble("amount", 0.0),
+                            paidAmount = obj.optDouble("paid_amount", 0.0),
+                            status = obj.optString("status", "Pending")
+                        )
+                    )
+                }
+                Result.success(list)
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     suspend fun register(name: String, businessName: String, identity: String, password: String): Result<AuthResponseDto> = withContext(Dispatchers.IO) {
         try {
             val jsonPayload = JSONObject().apply {
@@ -269,10 +309,12 @@ class CredflowApiService {
                     )
                 } else {
                     val errMsg = json.optString("error", "Google authentication failed")
+                    Log.e(GOOGLE_AUTH_LOG_TAG, "Backend rejected Google sign-in (HTTP ${response.code}): $errMsg")
                     Result.failure(IOException(errMsg))
                 }
             }
         } catch (e: Exception) {
+            Log.e(GOOGLE_AUTH_LOG_TAG, "Google token submission failed (${e.javaClass.simpleName}): ${e.message}")
             Result.failure(e)
         }
     }
@@ -308,6 +350,29 @@ class CredflowApiService {
         }
     }
 
+    suspend fun resetServerAccountData(authToken: String): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            val request = Request.Builder()
+                .url(ApiConfig.getEndpoint("reset_account_data.php"))
+                .addHeader("Authorization", "Bearer $authToken")
+                .post("{}".toRequestBody(jsonMediaType))
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                val body = response.body?.string() ?: ""
+                val json = try { JSONObject(body) } catch (_: Exception) { JSONObject() }
+                if (response.isSuccessful && json.optBoolean("success", false)) {
+                    Result.success(json.optString("message", "All server collection records have been reset."))
+                } else {
+                    val errMsg = json.optString("error", "Failed to reset server data (HTTP ${response.code})")
+                    Result.failure(IOException(errMsg))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     suspend fun logout(authToken: String? = null): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             if (authToken.isNullOrBlank()) return@withContext Result.success(Unit)
@@ -322,6 +387,91 @@ class CredflowApiService {
             }
         } catch (e: Exception) {
             Result.success(Unit) // Local logout can proceed regardless of network state
+        }
+    }
+
+    suspend fun requestPasswordResetOtp(identity: String): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            val jsonPayload = JSONObject().apply {
+                put("identity", identity.trim())
+            }
+            val body = jsonPayload.toString().toRequestBody(jsonMediaType)
+            val request = Request.Builder()
+                .url(ApiConfig.getEndpoint("send_reset_otp.php"))
+                .post(body)
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                val responseBody = response.body?.string() ?: ""
+                val json = try { JSONObject(responseBody) } catch (_: Exception) { JSONObject() }
+                if (response.isSuccessful && json.optBoolean("success", false)) {
+                    Result.success(json.optString("message", "Verification code sent."))
+                } else {
+                    val errMsg = json.optString("error", "Failed to send verification code (HTTP ${response.code})")
+                    Result.failure(IOException(errMsg))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun verifyPasswordResetOtp(identity: String, otp: String): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            val jsonPayload = JSONObject().apply {
+                put("identity", identity.trim())
+                put("otp", otp.trim())
+            }
+            val body = jsonPayload.toString().toRequestBody(jsonMediaType)
+            val request = Request.Builder()
+                .url(ApiConfig.getEndpoint("verify_reset_otp.php"))
+                .post(body)
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                val responseBody = response.body?.string() ?: ""
+                val json = try { JSONObject(responseBody) } catch (_: Exception) { JSONObject() }
+                if (response.isSuccessful && json.optBoolean("success", false)) {
+                    val resetToken = json.optString("reset_token", "")
+                    if (resetToken.isNotBlank()) {
+                        Result.success(resetToken)
+                    } else {
+                        Result.failure(IOException("Server did not return a valid reset token."))
+                    }
+                } else {
+                    val errMsg = json.optString("error", "Invalid verification code.")
+                    Result.failure(IOException(errMsg))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun resetPassword(resetToken: String, newPassword: String): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            val jsonPayload = JSONObject().apply {
+                put("reset_token", resetToken.trim())
+                put("new_password", newPassword)
+            }
+            val body = jsonPayload.toString().toRequestBody(jsonMediaType)
+            val request = Request.Builder()
+                .url(ApiConfig.getEndpoint("reset_password.php"))
+                .post(body)
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                val responseBody = response.body?.string() ?: ""
+                val json = try { JSONObject(responseBody) } catch (_: Exception) { JSONObject() }
+                if (response.isSuccessful && json.optBoolean("success", false)) {
+                    Result.success(json.optString("message", "Password updated successfully."))
+                } else {
+                    val errMsg = json.optString("error", "Failed to reset password.")
+                    Result.failure(IOException(errMsg))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
         }
     }
 

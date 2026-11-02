@@ -7,6 +7,9 @@ import com.example.credflow.data.local.UserSessionManager
 import com.example.credflow.data.remote.CredflowApiService
 import com.example.credflow.data.repository.CredflowRepository
 import com.example.credflow.domain.model.Customer
+import com.example.credflow.domain.model.InstallmentScheduleItem
+import com.example.credflow.domain.model.LoanCalculator
+import com.example.credflow.domain.model.Payment
 import com.example.credflow.rupees
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -17,7 +20,8 @@ import kotlinx.coroutines.launch
 class CredflowViewModel(
     private val repository: CredflowRepository,
     private val sessionManager: UserSessionManager,
-    private val apiService: CredflowApiService
+    private val apiService: CredflowApiService,
+    private val appSettings: com.example.credflow.data.local.AppSettingsManager? = null
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(
@@ -25,7 +29,17 @@ class CredflowViewModel(
             businessName = sessionManager.businessName,
             ownerName = sessionManager.userName,
             ownerPhone = if (sessionManager.userEmailOrPhone.contains("@")) "9876543210" else sessionManager.userEmailOrPhone,
-            ownerEmail = if (sessionManager.userEmailOrPhone.contains("@")) sessionManager.userEmailOrPhone else "ramesh@credflow.com"
+            ownerEmail = if (sessionManager.userEmailOrPhone.contains("@")) sessionManager.userEmailOrPhone else "ramesh@credflow.com",
+            acceptCash = appSettings?.acceptCash ?: true,
+            acceptUpi = appSettings?.acceptUpi ?: true,
+            acceptBank = appSettings?.acceptBank ?: false,
+            dailyReminders = appSettings?.dailyReminders ?: true,
+            reminderHour = appSettings?.reminderHour ?: 9,
+            reminderMinute = appSettings?.reminderMinute ?: 0,
+            overdueAlerts = appSettings?.overdueAlerts ?: true,
+            defaultCycle = appSettings?.defaultCycle ?: "Daily",
+            appLockEnabled = appSettings?.appLockEnabled ?: false,
+            lateFeeRule = appSettings?.lateFeeRule ?: "No Charge"
         )
     )
     val uiState: StateFlow<CredflowUiState> = _uiState.asStateFlow()
@@ -104,33 +118,103 @@ class CredflowViewModel(
         }
     }
 
+    private val _installments = MutableStateFlow<List<InstallmentScheduleItem>>(emptyList())
+    val installments: StateFlow<List<InstallmentScheduleItem>> = _installments.asStateFlow()
+
     fun selectCustomer(customer: Customer?) {
         _uiState.update { it.copy(selectedCustomer = customer) }
+        if (customer != null && customer.id > 0) {
+            loadInstallments(customer.id)
+        } else {
+            _installments.value = emptyList()
+        }
+    }
+
+    fun loadInstallments(customerId: Int) {
+        viewModelScope.launch {
+            val res = apiService.getInstallments(customerId, sessionManager.authToken)
+            res.onSuccess { list ->
+                _installments.value = list
+            }.onFailure {
+                val cust = _uiState.value.selectedCustomer
+                if (cust != null && cust.id == customerId) {
+                    val calc = LoanCalculator.calculateLoan(
+                        principal = cust.amount,
+                        interestRate = cust.interest,
+                        period = cust.period,
+                        periodUnit = cust.periodUnit,
+                        frequency = cust.cycle,
+                        collectionDay = cust.day,
+                        firstDueDateStr = cust.firstDueDate
+                    )
+                    _installments.value = calc.schedule
+                }
+            }
+        }
     }
 
     fun addCustomer(
         name: String,
         phone: String,
         amountStr: String,
+        interestStr: String = "0",
+        interestType: String = "Flat Interest",
+        periodStr: String = "1",
+        periodUnit: String = "Months",
         cycle: String,
         day: String,
+        firstDueDate: String = "",
         note: String,
         onSuccess: (Customer) -> Unit
     ) {
         val parsedAmount = amountStr.toDoubleOrNull()
-        if (name.isBlank() || phone.isBlank() || parsedAmount == null || parsedAmount <= 0) {
-            _uiState.update { it.copy(userMessage = "Enter customer name, phone and a valid amount.") }
+        if (name.isBlank() || phone.isBlank()) {
+            _uiState.update { it.copy(userMessage = "Customer name and phone number are required.") }
+            return
+        }
+        if (parsedAmount == null || parsedAmount <= 0.0) {
+            _uiState.update { it.copy(userMessage = "Loan amount (Principal) must be greater than zero.") }
+            return
+        }
+        val parsedInterest = interestStr.toDoubleOrNull() ?: 0.0
+        if (parsedInterest < 0.0) {
+            _uiState.update { it.copy(userMessage = "Interest rate cannot be negative.") }
+            return
+        }
+        val parsedPeriod = periodStr.toIntOrNull() ?: 1
+        if (parsedPeriod <= 0) {
+            _uiState.update { it.copy(userMessage = "Repayment period must be at least 1.") }
             return
         }
 
         val collectionDay = if (cycle == "Daily") "Daily" else if (cycle == "Monthly") "Monthly" else day
+        val calc = LoanCalculator.calculateLoan(
+            principal = parsedAmount,
+            interestRate = parsedInterest,
+            period = parsedPeriod,
+            periodUnit = periodUnit,
+            frequency = cycle,
+            collectionDay = collectionDay,
+            firstDueDateStr = firstDueDate
+        )
+
         val newCustomer = Customer(
             name = name.trim(),
             phone = phone.trim(),
-            amount = parsedAmount,
+            amount = calc.principal,
+            interest = calc.interestRate,
+            interestType = interestType,
+            period = parsedPeriod,
+            periodUnit = periodUnit,
+            installmentAmount = calc.installmentAmount,
+            totalInstallments = calc.numberOfInstallments,
+            firstDueDate = calc.firstDueDate,
+            finalDueDate = calc.finalDueDate,
             cycle = cycle,
             day = collectionDay,
-            totalDue = parsedAmount,
+            totalDue = calc.totalRepayment,
+            paid = 0.0,
+            due = calc.totalRepayment,
             note = note.trim()
         )
 
@@ -143,9 +227,10 @@ class CredflowViewModel(
                 _uiState.update {
                     it.copy(
                         selectedCustomer = saved,
-                        userMessage = if (saved.id > 0) "Customer saved to MySQL database." else "Saved locally (queued for sync)."
+                        userMessage = if (saved.id > 0) "Customer and loan schedule saved to MySQL." else "Saved locally (queued for sync)."
                     )
                 }
+                loadInstallments(saved.id)
                 onSuccess(saved)
             }.onFailure { err ->
                 _uiState.update { it.copy(userMessage = "Error saving customer: ${err.message}") }
@@ -162,6 +247,12 @@ class CredflowViewModel(
         val value = amountStr.toDoubleOrNull()
         if (value == null || value <= 0) {
             _uiState.update { it.copy(userMessage = "Enter a valid collection amount.") }
+            return
+        }
+        if (value > customer.due + 0.001) {
+            _uiState.update {
+                it.copy(userMessage = "Payment of ₹${String.format("%.2f", value)} exceeds remaining balance of ₹${String.format("%.2f", customer.due)}.")
+            }
             return
         }
 
@@ -182,6 +273,8 @@ class CredflowViewModel(
                         userMessage = "Collection of ${rupees(value)} recorded via $method."
                     )
                 }
+                loadInstallments(customer.id)
+                refreshData()
                 onSuccess(updatedCustomer)
             }.onFailure { err ->
                 _uiState.update { it.copy(userMessage = "Error recording payment: ${err.message}") }
@@ -364,6 +457,27 @@ class CredflowViewModel(
         _uiState.update { it.copy(authError = null) }
     }
 
+    fun requestResetOtp(identity: String, onComplete: (Result<String>) -> Unit) {
+        viewModelScope.launch {
+            val res = apiService.requestPasswordResetOtp(identity)
+            onComplete(res)
+        }
+    }
+
+    fun verifyResetOtp(identity: String, otp: String, onComplete: (Result<String>) -> Unit) {
+        viewModelScope.launch {
+            val res = apiService.verifyPasswordResetOtp(identity, otp)
+            onComplete(res)
+        }
+    }
+
+    fun resetPassword(resetToken: String, newPass: String, onComplete: (Result<String>) -> Unit) {
+        viewModelScope.launch {
+            val res = apiService.resetPassword(resetToken, newPass)
+            onComplete(res)
+        }
+    }
+
     fun logout(onSuccess: () -> Unit) {
         viewModelScope.launch {
             val token = sessionManager.authToken
@@ -454,20 +568,68 @@ class CredflowViewModel(
         overdueAlerts: Boolean,
         defaultCycle: String,
         appLockEnabled: Boolean,
-        lateFeeRule: String
+        lateFeeRule: String,
+        reminderHour: Int = _uiState.value.reminderHour,
+        reminderMinute: Int = _uiState.value.reminderMinute
     ) {
+        appSettings?.apply {
+            this.acceptCash = acceptCash
+            this.acceptUpi = acceptUpi
+            this.acceptBank = acceptBank
+            this.dailyReminders = dailyReminders
+            this.overdueAlerts = overdueAlerts
+            this.defaultCycle = defaultCycle
+            this.appLockEnabled = appLockEnabled
+            this.lateFeeRule = lateFeeRule
+            this.reminderHour = reminderHour
+            this.reminderMinute = reminderMinute
+        }
         _uiState.update {
             it.copy(
                 acceptCash = acceptCash,
                 acceptUpi = acceptUpi,
                 acceptBank = acceptBank,
                 dailyReminders = dailyReminders,
+                reminderHour = reminderHour,
+                reminderMinute = reminderMinute,
                 overdueAlerts = overdueAlerts,
                 defaultCycle = defaultCycle,
                 appLockEnabled = appLockEnabled,
                 lateFeeRule = lateFeeRule,
                 userMessage = "Settings saved successfully."
             )
+        }
+    }
+
+    fun prepareDataForExport(onReady: (List<Customer>, List<Payment>) -> Unit) {
+        viewModelScope.launch {
+            repository.refreshCustomers()
+            repository.refreshPayments()
+            val currentCustomers = _uiState.value.customers
+            val currentPayments = _uiState.value.payments
+            onReady(currentCustomers, currentPayments)
+        }
+    }
+
+    fun resetServerData(onComplete: (Result<String>) -> Unit) {
+        val token = sessionManager.authToken
+        if (token.isNullOrBlank()) {
+            onComplete(Result.failure(IllegalStateException("Not authenticated")))
+            return
+        }
+        viewModelScope.launch {
+            val res = apiService.resetServerAccountData(token)
+            if (res.isSuccess) {
+                repository.clearLocalData()
+                _uiState.update {
+                    it.copy(
+                        customers = emptyList(),
+                        payments = emptyList(),
+                        userMessage = "All account data reset on server and device."
+                    )
+                }
+            }
+            onComplete(res)
         }
     }
 
@@ -478,7 +640,7 @@ class CredflowViewModel(
                 it.copy(
                     customers = emptyList(),
                     payments = emptyList(),
-                    userMessage = "All local cached records cleared."
+                    userMessage = "All local cached records cleared on this device."
                 )
             }
         }
@@ -492,11 +654,12 @@ class CredflowViewModel(
         fun provideFactory(
             repository: CredflowRepository,
             sessionManager: UserSessionManager,
-            apiService: CredflowApiService
+            apiService: CredflowApiService,
+            appSettings: com.example.credflow.data.local.AppSettingsManager? = null
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                return CredflowViewModel(repository, sessionManager, apiService) as T
+                return CredflowViewModel(repository, sessionManager, apiService, appSettings) as T
             }
         }
     }

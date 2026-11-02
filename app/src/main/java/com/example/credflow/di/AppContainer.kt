@@ -10,6 +10,7 @@ import com.example.credflow.data.repository.CredflowRepositoryImpl
 class AppContainer(context: Context) {
     val database: CredflowDatabase = CredflowDatabase.getDatabase(context)
     val sessionManager: UserSessionManager = UserSessionManager(context)
+    val appSettings: com.example.credflow.data.local.AppSettingsManager = com.example.credflow.data.local.AppSettingsManager(context)
     val apiService: CredflowApiService = CredflowApiService()
 
     val repository: CredflowRepository = CredflowRepositoryImpl(

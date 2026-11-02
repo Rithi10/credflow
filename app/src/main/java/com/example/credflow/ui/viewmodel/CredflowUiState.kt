@@ -27,6 +27,8 @@ data class CredflowUiState(
     val acceptUpi: Boolean = true,
     val acceptBank: Boolean = false,
     val dailyReminders: Boolean = true,
+    val reminderHour: Int = 9,
+    val reminderMinute: Int = 0,
     val overdueAlerts: Boolean = true,
     val defaultCycle: String = "Daily",
     val appLockEnabled: Boolean = false,
