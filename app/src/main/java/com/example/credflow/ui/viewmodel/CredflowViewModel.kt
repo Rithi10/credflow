@@ -48,14 +48,23 @@ class CredflowViewModel(
         // Collect customers from Room cache
         viewModelScope.launch {
             repository.customers.collect { customerList ->
-                _uiState.update { it.copy(customers = customerList) }
+                _uiState.update { current ->
+                    val selected = if (current.selectedCustomer != null) {
+                        customerList.find { it.id == current.selectedCustomer.id } ?: current.selectedCustomer
+                    } else null
+                    current.copy(
+                        customers = customerList,
+                        selectedCustomer = selected
+                    )
+                }
             }
         }
 
-        // Collect payments from Room cache
+        // Collect payments from Room cache - deduplicate by id
         viewModelScope.launch {
             repository.payments.collect { paymentList ->
-                _uiState.update { it.copy(payments = paymentList) }
+                val deduplicated = paymentList.distinctBy { it.id }
+                _uiState.update { it.copy(payments = deduplicated) }
             }
         }
 
@@ -262,12 +271,20 @@ class CredflowViewModel(
             _uiState.update { it.copy(isLoading = false) }
 
             res.onSuccess { payment ->
+                val newPaid = customer.paid + value
+                val newDue = (customer.due - value).coerceAtLeast(0.0)
                 val updatedCustomer = customer.copy(
-                    paid = customer.paid + value,
-                    due = (customer.due - value).coerceAtLeast(0.0)
+                    paid = newPaid,
+                    due = newDue
                 )
-                _uiState.update {
-                    it.copy(
+                _uiState.update { current ->
+                    val updatedList = current.customers.map { c ->
+                        if (c.id == customer.id) updatedCustomer else c
+                    }
+                    val updatedPayments = (listOf(payment) + current.payments).distinctBy { it.id }
+                    current.copy(
+                        customers = updatedList,
+                        payments = updatedPayments,
                         paidCustomer = updatedCustomer,
                         selectedCustomer = updatedCustomer,
                         userMessage = "Collection of ${rupees(value)} recorded via $method."

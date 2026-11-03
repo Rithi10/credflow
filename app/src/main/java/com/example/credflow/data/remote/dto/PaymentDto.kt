@@ -59,3 +59,25 @@ data class RecordPaymentRequestDto(
     }
 }
 
+data class RecordPaymentResponseDto(
+    val paymentId: Int,
+    val paidAmount: Double,
+    val outstandingBalance: Double,
+    val remainingInstallments: Int = 0,
+    val totalInstallments: Int = 1,
+    val message: String = ""
+) {
+    companion object {
+        fun fromJson(json: JSONObject): RecordPaymentResponseDto {
+            return RecordPaymentResponseDto(
+                paymentId = json.optString("payment_id").toIntOrNull() ?: json.optInt("payment_id", 0),
+                paidAmount = json.optString("paid_amount").toDoubleOrNull() ?: json.optDouble("paid_amount", 0.0),
+                outstandingBalance = json.optString("outstanding_balance").toDoubleOrNull() ?: json.optDouble("outstanding_balance", 0.0),
+                remainingInstallments = json.optString("remaining_installments").toIntOrNull() ?: json.optInt("remaining_installments", 0),
+                totalInstallments = json.optString("total_installments").toIntOrNull() ?: json.optInt("total_installments", 1),
+                message = json.optString("message", "")
+            )
+        }
+    }
+}
+

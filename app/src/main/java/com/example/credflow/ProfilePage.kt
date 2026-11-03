@@ -80,26 +80,15 @@ fun ProfilePage(
                         }
                     }
                     Spacer(Modifier.height(14.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        OutlinedButton(
-                            onClick = { isEditing = !isEditing },
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
-                            border = BorderStroke(1.dp, Color(0xFFCAD9EF))
-                        ) {
-                            Icon(if (isEditing) Icons.Default.Check else Icons.Default.Edit, null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text(if (isEditing) "Close" else "Edit Profile")
-                        }
-                        Button(
-                            onClick = onSave,
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(containerColor = Green)
-                        ) {
-                            Icon(Icons.Default.Share, null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("Share Card")
-                        }
+                    OutlinedButton(
+                        onClick = { isEditing = !isEditing },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                        border = BorderStroke(1.dp, Color(0xFFCAD9EF))
+                    ) {
+                        Icon(if (isEditing) Icons.Default.Check else Icons.Default.Edit, null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(if (isEditing) "Close Editor" else "Edit Business Profile")
                     }
                 }
             }

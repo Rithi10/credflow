@@ -1,5 +1,6 @@
 package com.example.credflow.data.remote
 
+import android.os.Build
 import com.example.credflow.BuildConfig
 
 object ApiConfig {
@@ -8,7 +9,9 @@ object ApiConfig {
     // Android Studio Emulator on host PC:
     const val EMULATOR_BASE_URL = "http://10.0.2.2/credflow_api/"
 
-    private var currentUrl: String = normalizeBaseUrl(DEFAULT_BASE_URL)
+    private val defaultBaseUrl =
+        if (BuildConfig.DEBUG && isAndroidEmulator()) EMULATOR_BASE_URL else DEFAULT_BASE_URL
+    private var currentUrl: String = normalizeBaseUrl(defaultBaseUrl)
 
     var baseUrl: String
         get() = currentUrl
@@ -28,6 +31,17 @@ object ApiConfig {
 
         throw IllegalArgumentException("Production API URLs must use HTTPS.")
     }
+
+    private fun isAndroidEmulator(): Boolean =
+        Build.FINGERPRINT.startsWith("generic")
+            || Build.FINGERPRINT.startsWith("unknown")
+            || Build.MODEL.contains("google_sdk", ignoreCase = true)
+            || Build.MODEL.contains("Emulator", ignoreCase = true)
+            || Build.MODEL.contains("Android SDK built for", ignoreCase = true)
+            || Build.MODEL.contains("sdk_gphone", ignoreCase = true)
+            || Build.MANUFACTURER.contains("Genymotion", ignoreCase = true)
+            || (Build.BRAND.startsWith("generic", ignoreCase = true)
+            && Build.DEVICE.startsWith("generic", ignoreCase = true))
 
     /**
      * GOOGLE OAUTH 2.0 WEB CLIENT ID
@@ -55,4 +69,3 @@ object ApiConfig {
         return "$baseUrl$cleanPath"
     }
 }
-

@@ -64,6 +64,7 @@ class CredflowRepositoryImpl(
             val dtoList = remoteResult.getOrThrow()
             val entities = dtoList.map { dto ->
                 PaymentEntity(
+                    id = dto.id,
                     serverId = dto.id,
                     customerId = dto.customerId,
                     customerName = dto.customerName,
@@ -73,10 +74,15 @@ class CredflowRepositoryImpl(
                     isPendingSync = false
                 )
             }
-            paymentDao.insertAll(entities)
+            paymentDao.syncPayments(entities)
             Result.success(entities.map { it.toDomainModel() })
         } else {
-            Result.failure(remoteResult.exceptionOrNull() ?: Exception("Failed to load payments from server"))
+            val cached = paymentDao.getAllPaymentsList().map { it.toDomainModel() }
+            if (cached.isNotEmpty()) {
+                Result.success(cached)
+            } else {
+                Result.failure(remoteResult.exceptionOrNull() ?: Exception("Failed to load payments from server"))
+            }
         }
     }
 
@@ -145,7 +151,16 @@ class CredflowRepositoryImpl(
         }
 
         val isOnlineSuccess = remoteResult.isSuccess
+        val serverResponse = remoteResult.getOrNull()
+        val assignedId = if (isOnlineSuccess && (serverResponse?.paymentId ?: 0) > 0) {
+            serverResponse!!.paymentId
+        } else {
+            -kotlin.math.abs((System.currentTimeMillis() % 1000000).toInt())
+        }
+
         val paymentEntity = PaymentEntity(
+            id = assignedId,
+            serverId = if (isOnlineSuccess) assignedId else 0,
             customerId = customerId,
             customerName = customerName,
             amount = amount,
@@ -159,8 +174,16 @@ class CredflowRepositoryImpl(
         // Update local customer entity balance
         val existingCustomer = customerDao.getCustomerById(customerId)
         if (existingCustomer != null) {
-            val updatedPaid = existingCustomer.paid + amount
-            val updatedDue = (existingCustomer.due - amount).coerceAtLeast(0.0)
+            val updatedPaid = if (serverResponse != null && serverResponse.paidAmount > 0) {
+                serverResponse.paidAmount
+            } else {
+                existingCustomer.paid + amount
+            }
+            val updatedDue = if (serverResponse != null) {
+                serverResponse.outstandingBalance
+            } else {
+                (existingCustomer.due - amount).coerceAtLeast(0.0)
+            }
             customerDao.insertCustomer(
                 existingCustomer.copy(
                     paid = updatedPaid,

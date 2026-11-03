@@ -1,11 +1,11 @@
 package com.example.credflow.data.remote
 
-import android.util.Log
 import com.example.credflow.data.remote.dto.AddCustomerRequestDto
 import com.example.credflow.data.remote.dto.AuthResponseDto
 import com.example.credflow.data.remote.dto.CustomerDto
 import com.example.credflow.data.remote.dto.PaymentDto
 import com.example.credflow.data.remote.dto.RecordPaymentRequestDto
+import com.example.credflow.data.remote.dto.RecordPaymentResponseDto
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -16,8 +16,6 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
 import java.util.concurrent.TimeUnit
-
-private const val GOOGLE_AUTH_LOG_TAG = "CredflowGoogleAuth"
 
 class CredflowApiService {
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
@@ -110,7 +108,7 @@ class CredflowApiService {
         }
     }
 
-    suspend fun recordPayment(dto: RecordPaymentRequestDto, authToken: String? = null): Result<Unit> = withContext(Dispatchers.IO) {
+    suspend fun recordPayment(dto: RecordPaymentRequestDto, authToken: String? = null): Result<RecordPaymentResponseDto> = withContext(Dispatchers.IO) {
         try {
             val body = dto.toJson().toString().toRequestBody(jsonMediaType)
             val reqBuilder = Request.Builder()
@@ -130,7 +128,7 @@ class CredflowApiService {
 
                 val json = JSONObject(responseBody)
                 if (json.optBoolean("success", false)) {
-                    Result.success(Unit)
+                    Result.success(RecordPaymentResponseDto.fromJson(json))
                 } else {
                     val errMsg = json.optString("error", "Failed to record payment")
                     Result.failure(IOException(errMsg))
@@ -309,12 +307,10 @@ class CredflowApiService {
                     )
                 } else {
                     val errMsg = json.optString("error", "Google authentication failed")
-                    Log.e(GOOGLE_AUTH_LOG_TAG, "Backend rejected Google sign-in (HTTP ${response.code}): $errMsg")
                     Result.failure(IOException(errMsg))
                 }
             }
         } catch (e: Exception) {
-            Log.e(GOOGLE_AUTH_LOG_TAG, "Google token submission failed (${e.javaClass.simpleName}): ${e.message}")
             Result.failure(e)
         }
     }

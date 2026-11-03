@@ -6,9 +6,9 @@ import com.example.credflow.domain.model.Payment
 
 @Entity(tableName = "payments")
 data class PaymentEntity(
-    @PrimaryKey(autoGenerate = true)
-    val id: Int = 0,
-    val serverId: Int = 0,
+    @PrimaryKey
+    val id: Int,
+    val serverId: Int = id,
     val customerId: Int,
     val customerName: String,
     val amount: Double,
@@ -18,7 +18,7 @@ data class PaymentEntity(
     val isPendingSync: Boolean = false
 ) {
     fun toDomainModel(): Payment = Payment(
-        id = if (serverId > 0) serverId else id,
+        id = id,
         customerId = customerId,
         customerName = customerName,
         amount = amount,
@@ -29,6 +29,7 @@ data class PaymentEntity(
     companion object {
         fun fromDomainModel(payment: Payment, isPending: Boolean = false, idempotencyKey: String = ""): PaymentEntity =
             PaymentEntity(
+                id = payment.id,
                 serverId = payment.id,
                 customerId = payment.customerId,
                 customerName = payment.customerName,
@@ -40,4 +41,3 @@ data class PaymentEntity(
             )
     }
 }
-

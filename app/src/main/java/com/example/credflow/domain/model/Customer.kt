@@ -1,5 +1,7 @@
 package com.example.credflow.domain.model
 
+import kotlin.math.floor
+
 data class Customer(
     val id: Int = 0,
     val name: String,
@@ -26,9 +28,14 @@ data class Customer(
 
     val remainingInstallments: Int
         get() {
-            if (due <= 0.0) return 0
-            val single = if (installmentAmount > 0.0) installmentAmount else if (totalInstallments > 0) totalDue / totalInstallments else due
+            if (due <= 0.001) return 0
+            val single = when {
+                installmentAmount > 0.0 -> installmentAmount
+                totalInstallments > 0 -> totalDue / totalInstallments
+                else -> due
+            }
             if (single <= 0.0) return 0
-            return kotlin.math.ceil(due / single).toInt().coerceAtMost(totalInstallments).coerceAtLeast(1)
+            val paidCount = floor((paid + 0.999) / single).toInt()
+            return (totalInstallments - paidCount).coerceIn(0, totalInstallments)
         }
 }

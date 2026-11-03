@@ -5,7 +5,8 @@ import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 import java.util.Locale
-import kotlin.math.ceil
+import kotlin.math.max
+import kotlin.math.min
 
 object LoanScheduleCalculator {
     private val isoDateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
@@ -21,7 +22,7 @@ object LoanScheduleCalculator {
     }
 
     fun isDueToday(customer: Customer, today: LocalDate = LocalDate.now()): Boolean {
-        if (customer.due <= 0.0) return false
+        if (customer.due <= 0.001) return false
         return when (customer.cycle.lowercase(Locale.ROOT)) {
             "daily" -> true
             "weekly" -> {
@@ -39,43 +40,30 @@ object LoanScheduleCalculator {
     }
 
     fun getNextDueDate(customer: Customer, today: LocalDate = LocalDate.now(), payments: List<Payment> = emptyList()): String {
-        if (customer.due <= 0.0) return "Paid in Full"
+        if (customer.due <= 0.001) return "Paid in Full"
 
-        val customerPayments = payments.filter { it.customerId == customer.id }
-        val hasPaidToday = customerPayments.any { parseDate(it.paymentDate) == today }
+        val calc = LoanCalculator.calculateLoan(
+            principal = customer.amount,
+            interestRate = customer.interest,
+            period = customer.period,
+            periodUnit = customer.periodUnit,
+            frequency = customer.cycle,
+            collectionDay = customer.day,
+            firstDueDateStr = customer.firstDueDate
+        )
 
-        return when (customer.cycle.lowercase(Locale.ROOT)) {
-            "daily" -> {
-                val nextDate = if (hasPaidToday) today.plusDays(1) else today
-                nextDate.format(isoDateFormatter)
+        var remainingPaid = customer.paid
+        for (item in calc.schedule) {
+            val alloc = min(item.amount, max(0.0, remainingPaid))
+            remainingPaid -= alloc
+            val unpaid = (item.amount - alloc).coerceAtLeast(0.0)
+
+            if (unpaid >= 1.0) {
+                return item.dueDate
             }
-            "weekly" -> {
-                val targetDay = parseDayOfWeek(customer.day) ?: DayOfWeek.MONDAY
-                var next = today
-                if (today.dayOfWeek == targetDay) {
-                    if (hasPaidToday) {
-                        next = today.plusWeeks(1)
-                    }
-                } else {
-                    while (next.dayOfWeek != targetDay) {
-                        next = next.plusDays(1)
-                    }
-                }
-                next.format(isoDateFormatter)
-            }
-            "monthly" -> {
-                val created = parseDate(customer.createdAt)
-                val dayOfMonth = created?.dayOfMonth ?: 1
-                var nextMonth = if (today.dayOfMonth > dayOfMonth || (today.dayOfMonth == dayOfMonth && hasPaidToday)) {
-                    today.plusMonths(1)
-                } else {
-                    today
-                }
-                val validDay = dayOfMonth.coerceAtMost(nextMonth.lengthOfMonth())
-                nextMonth.withDayOfMonth(validDay).format(isoDateFormatter)
-            }
-            else -> today.format(isoDateFormatter)
         }
+
+        return "Paid in Full"
     }
 
     fun getOverdueInfo(
@@ -83,74 +71,43 @@ object LoanScheduleCalculator {
         today: LocalDate = LocalDate.now(),
         payments: List<Payment> = emptyList()
     ): Pair<Boolean, Long> {
-        // Fully paid customers are never overdue
-        if (customer.due <= 0.0) return Pair(false, 0L)
+        if (customer.due <= 0.001) return Pair(false, 0L)
 
-        // Payment due today is NOT overdue per Requirement 2
-        val customerPayments = payments.filter { it.customerId == customer.id }
-        val latestPayment = customerPayments.mapNotNull { parseDate(it.paymentDate) }.maxOrNull()
-        val createdDate = parseDate(customer.createdAt) ?: today
+        val calc = LoanCalculator.calculateLoan(
+            principal = customer.amount,
+            interestRate = customer.interest,
+            period = customer.period,
+            periodUnit = customer.periodUnit,
+            frequency = customer.cycle,
+            collectionDay = customer.day,
+            firstDueDateStr = customer.firstDueDate
+        )
 
-        when (customer.cycle.lowercase(Locale.ROOT)) {
-            "daily" -> {
-                val referenceDate = latestPayment ?: createdDate
-                val daysDiff = ChronoUnit.DAYS.between(referenceDate, today)
-                // If more than 1 day has passed without payment and due > 0, overdue
-                return if (daysDiff > 1) {
-                    Pair(true, daysDiff - 1)
-                } else {
-                    Pair(false, 0L)
-                }
+        var remainingPaid = customer.paid
+        var earliestOverdueDueDate: LocalDate? = null
+
+        for (item in calc.schedule) {
+            val dueDate = parseDate(item.dueDate) ?: continue
+            val alloc = min(item.amount, max(0.0, remainingPaid))
+            remainingPaid -= alloc
+            val unpaid = (item.amount - alloc).coerceAtLeast(0.0)
+
+            if (unpaid >= 1.0 && dueDate.isBefore(today)) {
+                earliestOverdueDueDate = dueDate
+                break
             }
-            "weekly" -> {
-                val targetDay = parseDayOfWeek(customer.day) ?: DayOfWeek.MONDAY
-                // If today is collection day, it is due today, not overdue
-                if (today.dayOfWeek == targetDay) return Pair(false, 0L)
+        }
 
-                // Find the most recent collection day before today
-                var lastDueDay = today.minusDays(1)
-                while (lastDueDay.dayOfWeek != targetDay) {
-                    lastDueDay = lastDueDay.minusDays(1)
-                }
-
-                // If created after that last due day, not overdue
-                if (createdDate.isAfter(lastDueDay)) return Pair(false, 0L)
-
-                // Check if payment was made on or after the last due day
-                val paidForLastCycle = latestPayment != null && !latestPayment.isBefore(lastDueDay)
-                return if (!paidForLastCycle) {
-                    val daysOver = ChronoUnit.DAYS.between(lastDueDay, today)
-                    Pair(true, daysOver)
-                } else {
-                    Pair(false, 0L)
-                }
-            }
-            "monthly" -> {
-                val dayOfMonth = createdDate.dayOfMonth
-                var lastDueDate = today.withDayOfMonth(dayOfMonth.coerceAtMost(today.lengthOfMonth()))
-                if (lastDueDate.isAfter(today)) {
-                    val prevMonth = today.minusMonths(1)
-                    lastDueDate = prevMonth.withDayOfMonth(dayOfMonth.coerceAtMost(prevMonth.lengthOfMonth()))
-                }
-                if (lastDueDate == today) return Pair(false, 0L)
-                if (createdDate.isAfter(lastDueDate)) return Pair(false, 0L)
-
-                val paidRecently = latestPayment != null && !latestPayment.isBefore(lastDueDate)
-                return if (!paidRecently) {
-                    val days = ChronoUnit.DAYS.between(lastDueDate, today)
-                    Pair(true, days)
-                } else {
-                    Pair(false, 0L)
-                }
-            }
-            else -> return Pair(false, 0L)
+        return if (earliestOverdueDueDate != null) {
+            val days = ChronoUnit.DAYS.between(earliestOverdueDueDate, today)
+            Pair(true, days.coerceAtLeast(1L))
+        } else {
+            Pair(false, 0L)
         }
     }
 
     fun getRemainingCycles(customer: Customer): Int {
-        if (customer.due <= 0.0) return 0
-        if (customer.amount <= 0.0) return 1
-        return ceil(customer.due / customer.amount).toInt().coerceAtLeast(1)
+        return customer.remainingInstallments
     }
 
     private fun parseDayOfWeek(dayStr: String): DayOfWeek? {
@@ -171,4 +128,3 @@ object LoanScheduleCalculator {
         }
     }
 }
-

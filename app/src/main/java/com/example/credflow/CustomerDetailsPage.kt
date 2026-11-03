@@ -57,8 +57,9 @@ fun CustomerDetailsPage(
             calc.schedule.map { item ->
                 val alloc = kotlin.math.min(item.amount, kotlin.math.max(0.0, remainingPaid))
                 remainingPaid -= alloc
+                val unpaid = (item.amount - alloc).coerceAtLeast(0.0)
                 val status = when {
-                    alloc >= item.amount - 0.001 -> "Paid"
+                    unpaid < 1.0 -> "Paid"
                     alloc > 0.0 -> "Partial"
                     item.dueDate < todayStr -> "Overdue"
                     else -> "Pending"
@@ -140,7 +141,9 @@ fun CustomerDetailsPage(
 
                     DetailRow("Amount Paid", rupees(customer.paid), color = Green)
                     DetailRow("Outstanding Balance", rupees(customer.due), isBold = true, color = if (customer.due > 0) Color(0xFFC62828) else Green)
-                    DetailRow("Remaining Installments", "${customer.remainingInstallments} of ${customer.totalInstallments} remaining")
+                    val paidInstallmentsCount = if (effectiveSchedule.isNotEmpty()) effectiveSchedule.count { it.status == "Paid" } else (customer.totalInstallments - customer.remainingInstallments)
+                    val remainingCount = (customer.totalInstallments - paidInstallmentsCount).coerceIn(0, customer.totalInstallments)
+                    DetailRow("Remaining Installments", "$remainingCount of ${customer.totalInstallments} remaining")
                     DetailRow("Next Due Date", nextDueDateStr, color = Navy)
                     if (isOverdue && overdueDays > 0) {
                         DetailRow("Overdue Period", "$overdueDays day(s) overdue", color = Color.Red)

@@ -57,8 +57,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
 
-        if (BuildConfig.DEBUG
-            && Build.VERSION.SDK_INT >= ANDROID_17_API_LEVEL
+        if (Build.VERSION.SDK_INT >= ANDROID_17_API_LEVEL
             && checkSelfPermission(ACCESS_LOCAL_NETWORK_PERMISSION) != PackageManager.PERMISSION_GRANTED
         ) {
             localNetworkPermissionLauncher.launch(ACCESS_LOCAL_NETWORK_PERMISSION)
@@ -464,7 +463,7 @@ fun CredflowApp(intent: android.content.Intent? = null) {
                     )
                     Screen.PaymentHistory -> SimpleListPage(
                         "Payment History", "Collections recorded in MySQL database",
-                        uiState.payments.map { it.toDisplayText() }.ifEmpty { listOf("No collections recorded yet.") },
+                        uiState.payments.distinctBy { it.id }.map { it.toDisplayText() }.ifEmpty { listOf("No collections recorded yet.") },
                         onPrimary = { goBack() }, primaryLabel = "Back"
                     )
                     Screen.Pending -> CustomerListPage("Pending Collections", "All", uiState.customers.filter { it.due > 0 },
