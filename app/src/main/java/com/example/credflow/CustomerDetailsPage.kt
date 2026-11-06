@@ -23,6 +23,8 @@ import com.example.credflow.domain.model.Customer
 import com.example.credflow.domain.model.InstallmentScheduleItem
 import com.example.credflow.domain.model.LoanCalculator
 import com.example.credflow.domain.model.LoanScheduleCalculator
+import kotlin.math.max
+import kotlin.math.min
 
 @Composable
 fun CustomerDetailsPage(
@@ -38,6 +40,8 @@ fun CustomerDetailsPage(
     }
 
     // If backend installments haven't loaded yet or offline, compute schedule locally
+    val isLoanCompleted = customer.due <= 0.001 || (customer.totalDue - customer.paid) <= 0.01
+
     val effectiveSchedule = remember(customer, installments) {
         if (installments.isNotEmpty()) {
             installments
@@ -55,11 +59,17 @@ fun CustomerDetailsPage(
             var remainingPaid = customer.paid
             val todayStr = java.time.LocalDate.now().toString()
             calc.schedule.map { item ->
-                val alloc = kotlin.math.min(item.amount, kotlin.math.max(0.0, remainingPaid))
-                remainingPaid -= alloc
+                val alloc = if (isLoanCompleted) {
+                    item.amount
+                } else {
+                    min(item.amount, max(0.0, remainingPaid))
+                }
+                if (!isLoanCompleted) {
+                    remainingPaid -= alloc
+                }
                 val unpaid = (item.amount - alloc).coerceAtLeast(0.0)
                 val status = when {
-                    unpaid < 1.0 -> "Paid"
+                    isLoanCompleted || unpaid < 1.0 -> "Paid"
                     alloc > 0.0 -> "Partial"
                     item.dueDate < todayStr -> "Overdue"
                     else -> "Pending"
@@ -90,7 +100,7 @@ fun CustomerDetailsPage(
                         Text(customer.name, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Navy)
                         StatusPill(
                             status = when {
-                                customer.due <= 0.0 -> "PAID"
+                                isLoanCompleted -> "COMPLETED"
                                 isOverdue -> "OVERDUE"
                                 else -> "ACTIVE"
                             }
@@ -260,7 +270,7 @@ private fun DetailRow(label: String, value: String, isBold: Boolean = false, col
 @Composable
 private fun StatusPill(status: String) {
     val (bg, fg) = when (status) {
-        "PAID" -> Pair(Color(0xFFE8F5E9), Color(0xFF2E7D32))
+        "COMPLETED", "PAID" -> Pair(Color(0xFFE8F5E9), Color(0xFF2E7D32))
         "OVERDUE" -> Pair(Color(0xFFFFEBEE), Color(0xFFC62828))
         else -> Pair(Color(0xFFE3F2FD), Color(0xFF1565C0))
     }

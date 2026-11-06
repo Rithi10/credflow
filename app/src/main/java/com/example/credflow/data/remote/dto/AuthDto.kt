@@ -6,6 +6,9 @@ data class AuthResponseDto(
     val token: String,
     val name: String,
     val businessName: String,
-    val message: String
+    val phone: String = "",
+    val email: String = "",
+    val address: String = "",
+    val gstin: String = "",
+    val message: String = ""
 )
-

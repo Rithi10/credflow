@@ -16,8 +16,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.credentials.CredentialManager
@@ -314,7 +316,7 @@ fun LoginPage(
 
     if (showForgotPasswordDialog) {
         var resetStep by remember { mutableStateOf(1) } // 1: Request OTP, 2: Verify OTP, 3: New Password, 4: Success
-        var resetIdentity by remember { mutableStateOf(identity) }
+        var resetIdentity by remember { mutableStateOf(identity.takeIf { it.contains("@") } ?: "") }
         var otpInput by remember { mutableStateOf("") }
         var newPasswordInput by remember { mutableStateOf("") }
         var confirmPasswordInput by remember { mutableStateOf("") }
@@ -380,7 +382,7 @@ fun LoginPage(
                     when (resetStep) {
                         1 -> {
                             Text(
-                                "Enter your registered mobile number or email address. We will verify your identity with a secure one-time verification code.",
+                                "Enter your registered email address. If an account exists, we will send a secure one-time verification code.",
                                 fontSize = 13.sp,
                                 color = Navy
                             )
@@ -390,16 +392,17 @@ fun LoginPage(
                                     resetIdentity = it
                                     dialogError = null
                                 },
-                                label = { Text("Mobile Number or Email *") },
-                                leadingIcon = { Icon(Icons.Default.Phone, null) },
+                                label = { Text("Email Address *") },
+                                leadingIcon = { Icon(Icons.Default.Email, null) },
                                 singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
                                 enabled = !isSubmitting,
                                 modifier = Modifier.fillMaxWidth()
                             )
                         }
                         2 -> {
                             Text(
-                                "A 6-digit verification code has been dispatched for $resetIdentity. Please enter it below to confirm your account.",
+                                "If an account exists for this email, a 6-digit verification code has been sent to its registered address. The code expires in 5 minutes.",
                                 fontSize = 13.sp,
                                 color = Navy
                             )
@@ -442,7 +445,7 @@ fun LoginPage(
                         }
                         3 -> {
                             Text(
-                                "Identity verified. Enter your new password below (minimum 6 characters).",
+                                "Identity verified. Enter your new password below (6 to 72 UTF-8 bytes).",
                                 fontSize = 13.sp,
                                 color = Navy
                             )
@@ -581,6 +584,10 @@ fun LoginPage(
                             onClick = {
                                 if (newPasswordInput.length < 6) {
                                     dialogError = "Password must be at least 6 characters."
+                                    return@Button
+                                }
+                                if (newPasswordInput.toByteArray(Charsets.UTF_8).size > 72) {
+                                    dialogError = "Password must be no more than 72 UTF-8 bytes."
                                     return@Button
                                 }
                                 if (newPasswordInput != confirmPasswordInput) {

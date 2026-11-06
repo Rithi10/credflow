@@ -27,7 +27,11 @@ class UserSessionManager(context: Context) {
         private const val KEY_AUTH_TOKEN = "auth_token"
         private const val KEY_USER_NAME = "user_name"
         private const val KEY_USER_EMAIL_OR_PHONE = "user_identity"
+        private const val KEY_USER_PHONE = "user_phone"
+        private const val KEY_USER_EMAIL = "user_email"
         private const val KEY_BUSINESS_NAME = "business_name"
+        private const val KEY_BUSINESS_ADDRESS = "business_address"
+        private const val KEY_GSTIN_NUMBER = "gstin_number"
         private const val KEY_CUSTOM_BASE_URL = "custom_base_url"
     }
 
@@ -44,16 +48,32 @@ class UserSessionManager(context: Context) {
         set(value) = prefs.edit().putString(KEY_AUTH_TOKEN, value).apply()
 
     var userName: String
-        get() = prefs.getString(KEY_USER_NAME, "Ramesh Kumar") ?: "Ramesh Kumar"
+        get() = prefs.getString(KEY_USER_NAME, "") ?: ""
         set(value) = prefs.edit().putString(KEY_USER_NAME, value).apply()
 
     var userEmailOrPhone: String
-        get() = prefs.getString(KEY_USER_EMAIL_OR_PHONE, "9876543210") ?: "9876543210"
+        get() = prefs.getString(KEY_USER_EMAIL_OR_PHONE, "") ?: ""
         set(value) = prefs.edit().putString(KEY_USER_EMAIL_OR_PHONE, value).apply()
 
+    var userPhone: String
+        get() = prefs.getString(KEY_USER_PHONE, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_USER_PHONE, value).apply()
+
+    var userEmail: String
+        get() = prefs.getString(KEY_USER_EMAIL, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_USER_EMAIL, value).apply()
+
     var businessName: String
-        get() = prefs.getString(KEY_BUSINESS_NAME, "Credflow Finance") ?: "Credflow Finance"
+        get() = prefs.getString(KEY_BUSINESS_NAME, "") ?: ""
         set(value) = prefs.edit().putString(KEY_BUSINESS_NAME, value).apply()
+
+    var businessAddress: String
+        get() = prefs.getString(KEY_BUSINESS_ADDRESS, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_BUSINESS_ADDRESS, value).apply()
+
+    var gstinNumber: String
+        get() = prefs.getString(KEY_GSTIN_NUMBER, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_GSTIN_NUMBER, value).apply()
 
     var customBaseUrl: String?
         get() = prefs.getString(KEY_CUSTOM_BASE_URL, null)
@@ -70,12 +90,23 @@ class UserSessionManager(context: Context) {
             .apply()
     }
 
+    fun saveProfile(name: String, bName: String, phone: String, email: String, address: String, gstin: String) {
+        prefs.edit()
+            .putString(KEY_USER_NAME, name)
+            .putString(KEY_BUSINESS_NAME, bName)
+            .putString(KEY_USER_PHONE, phone)
+            .putString(KEY_USER_EMAIL, email)
+            .putString(KEY_BUSINESS_ADDRESS, address)
+            .putString(KEY_GSTIN_NUMBER, gstin)
+            .apply()
+    }
+
     fun clearSession() {
-        val savedBaseUrl = customBaseUrl
-        prefs.edit().clear().apply()
-        if (savedBaseUrl != null) {
-            customBaseUrl = savedBaseUrl
-        }
+        prefs.edit()
+            .remove(KEY_IS_LOGGED_IN)
+            .remove(KEY_USER_ID)
+            .remove(KEY_AUTH_TOKEN)
+            .remove(KEY_USER_EMAIL_OR_PHONE)
+            .apply()
     }
 }
-

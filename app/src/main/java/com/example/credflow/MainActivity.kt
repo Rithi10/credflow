@@ -481,7 +481,14 @@ fun CredflowApp(intent: android.content.Intent? = null) {
                         answer = uiState.aiAnswer,
                         onAsk = { viewModel.askAi(chatQuestion) }
                     )
-                    Screen.AIPrediction -> PredictionPage(customers = uiState.customers, onDetails = { go(Screen.RiskDetails) })
+                    Screen.AIPrediction -> PredictionPage(
+                        customers = uiState.customers,
+                        isPredicting = uiState.isPredictingAi,
+                        probability = uiState.aiPredictionProbability,
+                        errorMsg = uiState.aiPredictionError,
+                        onRunPrediction = { viewModel.runAiPrediction() },
+                        onDetails = { go(Screen.RiskDetails) }
+                    )
                     Screen.RiskDetails -> SimpleListPage("Repayment Risk Details", "Demo insight — computed from your live records",
                         listOf("Customers with a remaining balance: ${uiState.customers.count { it.due > 0 }}",
                             "Total remaining amount: ${rupees(uiState.totalOutstanding)}",
@@ -515,20 +522,42 @@ fun CredflowApp(intent: android.content.Intent? = null) {
                             go(Screen.CollectionEntry)
                         }
                     )
-                    Screen.Notifications -> SimpleListPage("Notifications", "Collection reminders and updates",
-                        listOf("${uiState.customers.count { it.due > 0 }} customers have a remaining balance.",
-                            "${uiState.payments.size} collection entries recorded.",
-                            if (uiState.pendingOperationsCount > 0) "${uiState.pendingOperationsCount} operations queued for offline sync." else "All records synced with MySQL."),
-                        onPrimary = { goBack() }, primaryLabel = "Back")
+                    Screen.Notifications -> NotificationsPage(
+                        customers = uiState.customers,
+                        payments = uiState.payments,
+                        onSelectCustomer = { customer ->
+                            viewModel.selectCustomer(customer)
+                            go(when (customer.cycle) {
+                                "Daily" -> Screen.DailyDetails
+                                "Weekly" -> Screen.WeeklyOverview
+                                else -> Screen.MonthlyDetails
+                            })
+                        },
+                        onOpenPaymentHistory = { go(Screen.PaymentHistory) },
+                        onOpenOverdue = { go(Screen.Overdue) },
+                        onOpenDailyReport = { go(Screen.DailyReport) }
+                    )
                     Screen.Profile -> ProfilePage(
-                        businessName = uiState.businessName, onBusinessNameChange = { bName -> viewModel.updateProfile(bName, uiState.ownerName, uiState.ownerPhone, uiState.ownerEmail, uiState.businessAddress, uiState.gstinNumber) },
-                        ownerName = uiState.ownerName, onOwnerNameChange = { oName -> viewModel.updateProfile(uiState.businessName, oName, uiState.ownerPhone, uiState.ownerEmail, uiState.businessAddress, uiState.gstinNumber) },
-                        ownerPhone = uiState.ownerPhone, onOwnerPhoneChange = { oPhone -> viewModel.updateProfile(uiState.businessName, uiState.ownerName, oPhone, uiState.ownerEmail, uiState.businessAddress, uiState.gstinNumber) },
-                        ownerEmail = uiState.ownerEmail, onOwnerEmailChange = { oEmail -> viewModel.updateProfile(uiState.businessName, uiState.ownerName, uiState.ownerPhone, oEmail, uiState.businessAddress, uiState.gstinNumber) },
-                        businessAddress = uiState.businessAddress, onAddressChange = { bAddr -> viewModel.updateProfile(uiState.businessName, uiState.ownerName, uiState.ownerPhone, uiState.ownerEmail, bAddr, uiState.gstinNumber) },
-                        gstinNumber = uiState.gstinNumber, onGstinChange = { gst -> viewModel.updateProfile(uiState.businessName, uiState.ownerName, uiState.ownerPhone, uiState.ownerEmail, uiState.businessAddress, gst) },
-                        onSave = { },
-                        onOpenSettings = { go(Screen.Settings) }
+                        businessName = uiState.businessName,
+                        ownerName = uiState.ownerName,
+                        ownerPhone = uiState.ownerPhone,
+                        ownerEmail = uiState.ownerEmail,
+                        businessAddress = uiState.businessAddress,
+                        gstinNumber = uiState.gstinNumber,
+                        onSaveProfile = { bName, oName, oPhone, oEmail, bAddr, gstin, onComplete ->
+                            viewModel.updateProfile(bName, oName, oPhone, oEmail, bAddr, gstin, onComplete)
+                        },
+                        onOpenSettings = { go(Screen.Settings) },
+                        onResetPassword = { go(Screen.ResetPassword) }
+                    )
+                    Screen.ResetPassword -> ResetPasswordPage(
+                        onUpdatePassword = { currentPassword, newPassword, onComplete ->
+                            viewModel.changeAccountPassword(
+                                currentPassword,
+                                newPassword,
+                                onComplete
+                            )
+                        }
                     )
                     Screen.Settings -> SettingsPage(
                         acceptCash = uiState.acceptCash,
@@ -577,6 +606,7 @@ fun CredflowApp(intent: android.content.Intent? = null) {
                         onLateFeeRuleChange = { viewModel.updateSettings(acceptCash = uiState.acceptCash, acceptUpi = uiState.acceptUpi, acceptBank = uiState.acceptBank, dailyReminders = uiState.dailyReminders, overdueAlerts = uiState.overdueAlerts, defaultCycle = uiState.defaultCycle, appLockEnabled = uiState.appLockEnabled, lateFeeRule = it) },
                         onSave = { },
                         onOpenProfile = { go(Screen.Profile) },
+                        onResetPassword = { go(Screen.ResetPassword) },
                         onExportData = {
                             viewModel.prepareDataForExport { custs, pmts ->
                                 val res = CollectionBookExporter.exportAndSave(context, custs, pmts)

@@ -4,11 +4,14 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.credflow.data.local.UserSessionManager
+import com.example.credflow.data.remote.ApiConfig
 import com.example.credflow.data.remote.CredflowApiService
+import com.example.credflow.data.remote.dto.AuthResponseDto
 import com.example.credflow.data.repository.CredflowRepository
 import com.example.credflow.domain.model.Customer
 import com.example.credflow.domain.model.InstallmentScheduleItem
 import com.example.credflow.domain.model.LoanCalculator
+import com.example.credflow.domain.model.LoanScheduleCalculator
 import com.example.credflow.domain.model.Payment
 import com.example.credflow.rupees
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -16,6 +19,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.util.Locale
 
 class CredflowViewModel(
     private val repository: CredflowRepository,
@@ -26,10 +30,6 @@ class CredflowViewModel(
 
     private val _uiState = MutableStateFlow(
         CredflowUiState(
-            businessName = sessionManager.businessName,
-            ownerName = sessionManager.userName,
-            ownerPhone = if (sessionManager.userEmailOrPhone.contains("@")) "9876543210" else sessionManager.userEmailOrPhone,
-            ownerEmail = if (sessionManager.userEmailOrPhone.contains("@")) sessionManager.userEmailOrPhone else "ramesh@credflow.com",
             acceptCash = appSettings?.acceptCash ?: true,
             acceptUpi = appSettings?.acceptUpi ?: true,
             acceptBank = appSettings?.acceptBank ?: false,
@@ -86,7 +86,10 @@ class CredflowViewModel(
         val token = sessionManager.authToken ?: return
         viewModelScope.launch {
             val res = apiService.validateSession(token)
-            if (res.isFailure) {
+            if (res.isSuccess) {
+                val auth = res.getOrThrow()
+                applyBackendProfile(auth)
+            } else {
                 repository.clearLocalData()
                 sessionManager.clearSession()
                 _uiState.update {
@@ -336,6 +339,56 @@ class CredflowViewModel(
         _uiState.update { it.copy(aiAnswer = answer) }
     }
 
+    fun runAiPrediction(customer: Customer? = null) {
+        val target = customer ?: _uiState.value.selectedCustomer ?: _uiState.value.customers.firstOrNull()
+
+        val amount = target?.totalDue ?: 10000.0
+        val installment = if ((target?.installmentAmount ?: 0.0) > 0) target!!.installmentAmount else (amount / maxOf(1, target?.totalInstallments ?: 10))
+
+        val (isOverdue, overdueDays) = target?.let { LoanScheduleCalculator.getOverdueInfo(it) } ?: Pair(false, 0L)
+        val missedPayments = if (isOverdue) (overdueDays / 30 + 1).toInt() else 0
+
+        val paid = target?.paid ?: 0.0
+        val total = target?.totalDue ?: 10000.0
+        val paymentRatio = if (total > 0) (paid / total).coerceIn(0.0, 1.0) else 0.8
+
+        _uiState.update {
+            it.copy(
+                isPredictingAi = true,
+                aiPredictionError = null
+            )
+        }
+
+        viewModelScope.launch {
+            val res = apiService.predictRepaymentProbability(
+                amount = amount,
+                installment = installment,
+                missedPayments = missedPayments,
+                paymentRatio = paymentRatio,
+                overdueDays = overdueDays.toInt()
+            )
+
+            res.onSuccess { probability ->
+                _uiState.update {
+                    it.copy(
+                        isPredictingAi = false,
+                        aiPredictionProbability = probability,
+                        aiPredictionError = null,
+                        userMessage = "FastAPI AI Model: Repayment probability is ${String.format(
+                            Locale.ROOT, "%.1f", probability * 100)}%"
+                    )
+                }
+            }.onFailure { err ->
+                _uiState.update {
+                    it.copy(
+                        isPredictingAi = false,
+                        aiPredictionError = err.message ?: "Failed to connect to FastAPI AI model at ${ApiConfig.getAiEndpoint("predict")}"
+                    )
+                }
+            }
+        }
+    }
+
     fun login(identity: String, pass: String, onSuccess: () -> Unit) {
         val cleanIdentity = identity.trim()
         val cleanPass = pass.trim()
@@ -353,16 +406,15 @@ class CredflowViewModel(
                 sessionManager.saveSession(
                     userId = auth.userId,
                     token = auth.token,
-                    name = auth.name.ifBlank { "User" },
+                    name = auth.name,
                     identity = cleanIdentity,
-                    businessName = auth.businessName.ifBlank { "Credflow Finance" }
+                    businessName = auth.businessName
                 )
+                applyBackendProfile(auth)
                 _uiState.update {
                     it.copy(
                         isAuthenticating = false,
                         authError = null,
-                        ownerName = auth.name.ifBlank { it.ownerName },
-                        businessName = auth.businessName.ifBlank { it.businessName },
                         userMessage = "Welcome back, ${auth.name}!"
                     )
                 }
@@ -408,14 +460,13 @@ class CredflowViewModel(
                     token = auth.token,
                     name = cleanName,
                     identity = cleanIdentity,
-                    businessName = cleanBusiness
+                    businessName = auth.businessName
                 )
+                applyBackendProfile(auth)
                 _uiState.update {
                     it.copy(
                         isAuthenticating = false,
                         authError = null,
-                        ownerName = cleanName,
-                        businessName = cleanBusiness,
                         userMessage = "Account registered successfully!"
                     )
                 }
@@ -444,12 +495,11 @@ class CredflowViewModel(
                     identity = "",
                     businessName = auth.businessName
                 )
+                applyBackendProfile(auth)
                 _uiState.update {
                     it.copy(
                         isAuthenticating = false,
                         authError = null,
-                        ownerName = auth.name,
-                        businessName = auth.businessName,
                         userMessage = "Signed in with Google successfully!"
                     )
                 }
@@ -495,6 +545,21 @@ class CredflowViewModel(
         }
     }
 
+    fun changeAccountPassword(
+        currentPassword: String,
+        newPassword: String,
+        onComplete: (Result<String>) -> Unit
+    ) {
+        viewModelScope.launch {
+            val result = apiService.changePassword(
+                authToken = sessionManager.authToken,
+                currentPassword = currentPassword,
+                newPassword = newPassword
+            )
+            onComplete(result)
+        }
+    }
+
     fun logout(onSuccess: () -> Unit) {
         viewModelScope.launch {
             val token = sessionManager.authToken
@@ -503,10 +568,6 @@ class CredflowViewModel(
             sessionManager.clearSession()
             _uiState.update {
                 CredflowUiState(
-                    businessName = "Credflow Finance",
-                    ownerName = "User",
-                    ownerPhone = "",
-                    ownerEmail = "",
                     customers = emptyList(),
                     payments = emptyList(),
                     userMessage = "Logged out successfully."
@@ -524,11 +585,9 @@ class CredflowViewModel(
             if (res.isSuccess) {
                 val auth = res.getOrThrow()
                 sessionManager.saveSession(auth.userId, auth.token, name, email, bName)
+                applyBackendProfile(auth)
                 _uiState.update {
                     it.copy(
-                        ownerName = name,
-                        ownerEmail = email,
-                        businessName = bName,
                         userMessage = "Signed in as $email"
                     )
                 }
@@ -538,12 +597,10 @@ class CredflowViewModel(
                 val loginRes = apiService.login(email, oauthPass)
                 if (loginRes.isSuccess) {
                     val auth = loginRes.getOrThrow()
-                    sessionManager.saveSession(auth.userId, auth.token, auth.name.ifBlank { name }, email, auth.businessName.ifBlank { bName })
+                    sessionManager.saveSession(auth.userId, auth.token, auth.name, email, auth.businessName)
+                    applyBackendProfile(auth)
                     _uiState.update {
                         it.copy(
-                            ownerName = auth.name.ifBlank { name },
-                            ownerEmail = email,
-                            businessName = auth.businessName.ifBlank { bName },
                             userMessage = "Signed in as $email"
                         )
                     }
@@ -562,17 +619,92 @@ class CredflowViewModel(
         ownerPhone: String,
         ownerEmail: String,
         businessAddress: String,
-        gstinNumber: String
+        gstinNumber: String,
+        onComplete: (Result<Unit>) -> Unit = {}
     ) {
+        val cleanName = ownerName.trim()
+        val cleanBName = businessName.trim()
+        val cleanPhone = ownerPhone.trim()
+        val cleanEmail = ownerEmail.trim()
+        val cleanAddr = businessAddress.trim()
+        val cleanGstin = gstinNumber.trim()
+
+        if (cleanName.isBlank()) {
+            onComplete(Result.failure(IllegalArgumentException("Proprietor / Owner Name cannot be blank.")))
+            return
+        }
+        if (cleanBName.isBlank()) {
+            onComplete(Result.failure(IllegalArgumentException("Business Name cannot be blank.")))
+            return
+        }
+
+        _uiState.update { it.copy(isLoading = true) }
+
+        viewModelScope.launch {
+            val token = sessionManager.authToken
+            if (token.isNullOrBlank()) {
+                _uiState.update { it.copy(isLoading = false) }
+                onComplete(Result.failure(IllegalStateException("Not authenticated")))
+                return@launch
+            }
+
+            val updateResult = apiService.updateProfile(
+                authToken = token,
+                name = cleanName,
+                businessName = cleanBName,
+                phone = cleanPhone,
+                email = cleanEmail,
+                address = cleanAddr,
+                gstin = cleanGstin
+            )
+            if (updateResult.isFailure) {
+                _uiState.update { it.copy(isLoading = false) }
+                onComplete(Result.failure(updateResult.exceptionOrNull() ?: IllegalStateException("Could not save Business Profile.")))
+                return@launch
+            }
+
+            val refreshResult = apiService.validateSession(token)
+            if (refreshResult.isFailure) {
+                _uiState.update { it.copy(isLoading = false) }
+                onComplete(Result.failure(refreshResult.exceptionOrNull() ?: IllegalStateException("Could not refresh Business Profile from the server.")))
+                return@launch
+            }
+
+            val savedProfile = refreshResult.getOrThrow()
+            if (savedProfile.userId != sessionManager.userId) {
+                _uiState.update { it.copy(isLoading = false) }
+                onComplete(Result.failure(IllegalStateException("The server returned a profile for a different account.")))
+                return@launch
+            }
+
+            applyBackendProfile(savedProfile)
+            _uiState.update {
+                it.copy(
+                    isLoading = false,
+                    userMessage = "Business Profile saved successfully."
+                )
+            }
+            onComplete(Result.success(Unit))
+        }
+    }
+
+    private fun applyBackendProfile(auth: AuthResponseDto) {
+        sessionManager.saveProfile(
+            name = auth.name,
+            bName = auth.businessName,
+            phone = auth.phone,
+            email = auth.email,
+            address = auth.address,
+            gstin = auth.gstin
+        )
         _uiState.update {
             it.copy(
-                businessName = businessName,
-                ownerName = ownerName,
-                ownerPhone = ownerPhone,
-                ownerEmail = ownerEmail,
-                businessAddress = businessAddress,
-                gstinNumber = gstinNumber,
-                userMessage = "Business profile saved successfully."
+                ownerName = auth.name,
+                businessName = auth.businessName,
+                ownerPhone = auth.phone,
+                ownerEmail = auth.email,
+                businessAddress = auth.address,
+                gstinNumber = auth.gstin
             )
         }
     }
@@ -681,4 +813,3 @@ class CredflowViewModel(
         }
     }
 }
-

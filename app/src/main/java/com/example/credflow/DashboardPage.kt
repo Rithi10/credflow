@@ -17,7 +17,7 @@ import androidx.compose.ui.unit.sp
 @Composable
 fun DashboardPage(
     customers: List<Customer>, payments: List<String>, onCategories: () -> Unit,
-    onSearch: () -> Unit, onReports: () -> Unit,
+    onSearch: () -> Unit, onReports: () -> Unit = {},
     onNotifications: () -> Unit, onSettings: () -> Unit,
     onDaily: () -> Unit, onWeekly: () -> Unit, onMonthly: () -> Unit,
     onRefresh: () -> Unit = {}
@@ -54,7 +54,6 @@ fun DashboardPage(
         item { CycleCard("Daily Customers", "${customers.count { it.cycle == "Daily" }} customers", "Add and record daily collections", Icons.Default.Today, onDaily) }
         item { CycleCard("Weekly Customers", "${customers.count { it.cycle == "Weekly" }} customers", "Separate Monday to Sunday lists", Icons.Default.CalendarViewWeek, onWeekly) }
         item { CycleCard("Monthly Customers", "${customers.count { it.cycle == "Monthly" }} customers", "Monthly collection list", Icons.Default.CalendarMonth, onMonthly) }
-        item { CycleCard("Reports", "${payments.size} collection entries", "Daily, weekly and monthly summaries", Icons.Default.BarChart, onReports) }
         item { Button(onClick = onCategories, modifier = Modifier.fillMaxWidth()) { Text("View Customer Categories") } }
     }
 }

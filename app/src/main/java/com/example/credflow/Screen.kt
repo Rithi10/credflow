@@ -14,5 +14,6 @@ enum class Screen(val title: String) {
     Forecast("AI Collection Forecast"), WeeklyForecast("Weekly Forecast Details"),
     MonthlyForecast("Monthly Forecast Details"), Reports("Reports"), DailyReport("Daily Report Details"),
     WeeklyReport("Weekly Report Details"), MonthlyReport("Monthly Report Details"),
-    Search("Search Customers"), Notifications("Notifications"), Profile("Business Profile"), Settings("App Settings")
+    Search("Search Customers"), Notifications("Notifications"), Profile("Business Profile"),
+    ResetPassword("Reset Your Password"), Settings("App Settings")
 }

@@ -12,7 +12,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -31,12 +30,12 @@ fun SettingsPage(
     lateFeeRule: String, onLateFeeRuleChange: (String) -> Unit,
     onSave: () -> Unit,
     onOpenProfile: () -> Unit,
+    onResetPassword: () -> Unit = {},
     onExportData: () -> Unit,
     onLogOut: () -> Unit,
     onResetData: () -> Unit,
     onDeleteServerData: () -> Unit = {}
 ) {
-    var showPasswordDialog by remember { mutableStateOf(false) }
     var showClearCacheDialog by remember { mutableStateOf(false) }
     var showDeleteServerDialog by remember { mutableStateOf(false) }
     var showLogoutDialog by remember { mutableStateOf(false) }
@@ -167,12 +166,12 @@ fun SettingsPage(
                     Text("Security & Privacy", fontWeight = FontWeight.Bold, color = Navy, fontSize = 16.sp)
                     SwitchRow("Biometric / PIN App Lock", appLockEnabled, onAppLockChange)
                     OutlinedButton(
-                        onClick = { showPasswordDialog = true },
+                        onClick = onResetPassword,
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Icon(Icons.Default.Lock, null)
                         Spacer(Modifier.width(8.dp))
-                        Text("Change Account Password")
+                        Text("Reset Your Password")
                     }
                 }
             }
@@ -272,60 +271,6 @@ fun SettingsPage(
             },
             dismissButton = {
                 OutlinedButton(onClick = { showLogoutDialog = false }) { Text("No") }
-            }
-        )
-    }
-
-    // Change Password Dialog
-    if (showPasswordDialog) {
-        var oldPass by remember { mutableStateOf("") }
-        var newPass by remember { mutableStateOf("") }
-        var confirmPass by remember { mutableStateOf("") }
-        var passError by remember { mutableStateOf("") }
-
-        AlertDialog(
-            onDismissRequest = { showPasswordDialog = false },
-            title = { Text("Change Password", fontWeight = FontWeight.Bold) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedTextField(
-                        value = oldPass, onValueChange = { oldPass = it },
-                        label = { Text("Current Password") },
-                        visualTransformation = PasswordVisualTransformation(),
-                        singleLine = true, modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = newPass, onValueChange = { newPass = it },
-                        label = { Text("New Password") },
-                        visualTransformation = PasswordVisualTransformation(),
-                        singleLine = true, modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = confirmPass, onValueChange = { confirmPass = it },
-                        label = { Text("Confirm New Password") },
-                        visualTransformation = PasswordVisualTransformation(),
-                        singleLine = true, modifier = Modifier.fillMaxWidth()
-                    )
-                    if (passError.isNotBlank()) {
-                        Text(passError, color = Color.Red, fontSize = 12.sp)
-                    }
-                }
-            },
-            confirmButton = {
-                Button(onClick = {
-                    if (oldPass.isBlank()) {
-                        passError = "Enter current password"
-                    } else if (newPass.length < 4) {
-                        passError = "New password must be at least 4 characters"
-                    } else if (newPass != confirmPass) {
-                        passError = "Passwords do not match"
-                    } else {
-                        showPasswordDialog = false
-                    }
-                }) { Text("Update") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showPasswordDialog = false }) { Text("Cancel") }
             }
         )
     }

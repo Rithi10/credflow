@@ -231,6 +231,10 @@ class CredflowApiService {
                             token = json.optString("token", ""),
                             name = json.optString("name", name),
                             businessName = json.optString("business_name", businessName),
+                            phone = json.optString("phone", ""),
+                            email = json.optString("email", ""),
+                            address = json.optString("business_address", ""),
+                            gstin = json.optString("gstin_number", ""),
                             message = json.optString("message", "Registered successfully")
                         )
                     )
@@ -265,8 +269,12 @@ class CredflowApiService {
                             success = true,
                             userId = json.optInt("user_id", 0),
                             token = json.optString("token", ""),
-                            name = json.optString("name", ""),
+                            name = json.optString("owner_name", json.optString("name", "")),
                             businessName = json.optString("business_name", ""),
+                            phone = json.optString("phone", ""),
+                            email = json.optString("email", ""),
+                            address = json.optString("business_address", ""),
+                            gstin = json.optString("gstin_number", ""),
                             message = json.optString("message", "Login successful")
                         )
                     )
@@ -300,8 +308,12 @@ class CredflowApiService {
                             success = true,
                             userId = json.optInt("user_id", 0),
                             token = json.optString("token", ""),
-                            name = json.optString("name", "Google User"),
-                            businessName = json.optString("business_name", "Credflow Finance"),
+                            name = json.optString("owner_name", json.optString("name", "")),
+                            businessName = json.optString("business_name", ""),
+                            phone = json.optString("phone", ""),
+                            email = json.optString("email", ""),
+                            address = json.optString("business_address", ""),
+                            gstin = json.optString("gstin_number", ""),
                             message = json.optString("message", "Google authentication successful")
                         )
                     )
@@ -325,20 +337,121 @@ class CredflowApiService {
 
             client.newCall(request).execute().use { response ->
                 val responseBody = response.body?.string() ?: ""
-                val json = JSONObject(responseBody)
+                val json = try { JSONObject(responseBody) } catch (_: Exception) { JSONObject() }
                 if (response.isSuccessful && json.optBoolean("success", false)) {
                     Result.success(
                         AuthResponseDto(
                             success = true,
                             userId = json.optInt("user_id", 0),
                             token = authToken,
-                            name = json.optString("name", "User"),
-                            businessName = json.optString("business_name", "Credflow Finance"),
+                            name = json.optString("owner_name", json.optString("name", "")),
+                            businessName = json.optString("business_name", ""),
+                            phone = json.optString("phone", ""),
+                            email = json.optString("email", ""),
+                            address = json.optString("business_address", json.optString("address", "")),
+                            gstin = json.optString("gstin_number", json.optString("gstin", "")),
                             message = json.optString("message", "Session valid")
                         )
                     )
                 } else {
                     Result.failure(IOException("Session expired or invalid"))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun updateProfile(
+        authToken: String,
+        name: String,
+        businessName: String,
+        phone: String,
+        email: String,
+        address: String,
+        gstin: String
+    ): Result<AuthResponseDto> = withContext(Dispatchers.IO) {
+        try {
+            val jsonPayload = JSONObject().apply {
+                put("owner_name", name.trim())
+                put("business_name", businessName.trim())
+                put("phone", phone.trim())
+                put("email", email.trim())
+                put("business_address", address.trim())
+                put("gstin_number", gstin.trim())
+            }
+            val body = jsonPayload.toString().toRequestBody(jsonMediaType)
+            val request = Request.Builder()
+                .url(ApiConfig.getEndpoint("update_profile.php"))
+                .addHeader("Authorization", "Bearer $authToken")
+                .post(body)
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                val responseBody = response.body?.string() ?: ""
+                val json = try { JSONObject(responseBody) } catch (_: Exception) { JSONObject() }
+                if (response.isSuccessful && json.optBoolean("success", false)) {
+                    Result.success(
+                        AuthResponseDto(
+                            success = true,
+                            userId = json.optInt("user_id", 0),
+                            token = authToken,
+                            name = json.optString("owner_name", json.optString("name", name)),
+                            businessName = json.optString("business_name", businessName),
+                            phone = json.optString("phone", phone),
+                            email = json.optString("email", email),
+                            address = json.optString("business_address", json.optString("address", address)),
+                            gstin = json.optString("gstin_number", json.optString("gstin", gstin)),
+                            message = json.optString("message", "Profile updated successfully")
+                        )
+                    )
+                } else {
+                    val errMsg = json.optString("error", "Failed to update profile (HTTP ${response.code})")
+                    Result.failure(IOException(errMsg))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun changePassword(
+        authToken: String?,
+        currentPassword: String,
+        newPassword: String
+    ): Result<String> = withContext(Dispatchers.IO) {
+        if (authToken.isNullOrBlank()) {
+            return@withContext Result.failure(IOException("Please log in again to change your password."))
+        }
+
+        try {
+            val payload = JSONObject().apply {
+                put("current_password", currentPassword)
+                put("new_password", newPassword)
+            }
+            val request = Request.Builder()
+                .url(ApiConfig.getEndpoint("change_password.php"))
+                .addHeader("Authorization", "Bearer $authToken")
+                .post(payload.toString().toRequestBody(jsonMediaType))
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                val responseBody = response.body?.string() ?: ""
+                val json = try {
+                    JSONObject(responseBody)
+                } catch (_: Exception) {
+                    JSONObject()
+                }
+                if (response.isSuccessful && json.optBoolean("success", false)) {
+                    Result.success(
+                        json.optString("message", "Password updated successfully.")
+                    )
+                } else {
+                    val error = json.optString(
+                        "error",
+                        "Could not update the password (HTTP ${response.code})."
+                    )
+                    Result.failure(IOException(error))
                 }
             }
         } catch (e: Exception) {
@@ -471,6 +584,44 @@ class CredflowApiService {
         }
     }
 
+    suspend fun predictRepaymentProbability(
+        amount: Double,
+        installment: Double,
+        missedPayments: Int,
+        paymentRatio: Double,
+        overdueDays: Int
+    ): Result<Double> = withContext(Dispatchers.IO) {
+        try {
+            val jsonPayload = JSONObject().apply {
+                put("amount", amount)
+                put("installment", installment)
+                put("missed_payments", missedPayments)
+                put("payment_ratio", paymentRatio)
+                put("overdue_days", overdueDays)
+            }
+            val body = jsonPayload.toString().toRequestBody(jsonMediaType)
+            val url = ApiConfig.getAiEndpoint("predict")
+            val request = Request.Builder()
+                .url(url)
+                .post(body)
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                val responseBody = response.body?.string() ?: ""
+                val json = try { JSONObject(responseBody) } catch (_: Exception) { JSONObject() }
+                if (response.isSuccessful && json.has("repayment_probability")) {
+                    val probability = json.optDouble("repayment_probability", 0.0)
+                    Result.success(probability)
+                } else {
+                    val errMsg = json.optString("detail", json.optString("error", "FastAPI error (HTTP ${response.code})"))
+                    Result.failure(IOException(errMsg))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     private fun parseErrorMessage(responseBody: String): String? {
         return try {
             val obj = JSONObject(responseBody)
@@ -480,4 +631,3 @@ class CredflowApiService {
         }
     }
 }
-

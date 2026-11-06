@@ -17,12 +17,12 @@ data class CredflowUiState(
     val paidCustomer: Customer? = null,
     val searchQuery: String = "",
     val aiAnswer: String = "",
-    val businessName: String = "Credflow Finance",
-    val ownerName: String = "Ramesh Kumar",
-    val ownerPhone: String = "9876543210",
-    val ownerEmail: String = "ramesh@credflow.com",
-    val businessAddress: String = "12 Brigade Road, Bengaluru",
-    val gstinNumber: String = "29ABCDE1234F1Z5",
+    val businessName: String = "",
+    val ownerName: String = "",
+    val ownerPhone: String = "",
+    val ownerEmail: String = "",
+    val businessAddress: String = "",
+    val gstinNumber: String = "",
     val acceptCash: Boolean = true,
     val acceptUpi: Boolean = true,
     val acceptBank: Boolean = false,
@@ -32,7 +32,10 @@ data class CredflowUiState(
     val overdueAlerts: Boolean = true,
     val defaultCycle: String = "Daily",
     val appLockEnabled: Boolean = false,
-    val lateFeeRule: String = "No Charge"
+    val lateFeeRule: String = "No Charge",
+    val isPredictingAi: Boolean = false,
+    val aiPredictionProbability: Double? = null,
+    val aiPredictionError: String? = null
 ) {
     val totalOutstanding: Double
         get() = customers.sumOf { it.due }
@@ -56,4 +59,3 @@ data class CredflowUiState(
             }
         }
 }
-
