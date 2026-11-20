@@ -4,7 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.credflow.data.local.UserSessionManager
-import com.example.credflow.data.remote.ApiConfig
+import com.example.credflow.data.remote.ApiHttpException
 import com.example.credflow.data.remote.CredflowApiService
 import com.example.credflow.data.remote.dto.AuthResponseDto
 import com.example.credflow.data.repository.CredflowRepository
@@ -86,10 +86,13 @@ class CredflowViewModel(
         val token = sessionManager.authToken ?: return
         viewModelScope.launch {
             val res = apiService.validateSession(token)
+            val sessionError = res.exceptionOrNull()
             if (res.isSuccess) {
                 val auth = res.getOrThrow()
                 applyBackendProfile(auth)
-            } else {
+            } else if (sessionError is ApiHttpException
+                && sessionError.statusCode == 401
+            ) {
                 repository.clearLocalData()
                 sessionManager.clearSession()
                 _uiState.update {
@@ -98,6 +101,10 @@ class CredflowViewModel(
                         payments = emptyList(),
                         userMessage = "Session expired. Please log in again."
                     )
+                }
+            } else {
+                _uiState.update {
+                    it.copy(userMessage = "Could not verify your session. Check your connection and try again.")
                 }
             }
         }
@@ -339,50 +346,73 @@ class CredflowViewModel(
         _uiState.update { it.copy(aiAnswer = answer) }
     }
 
-    fun runAiPrediction(customer: Customer? = null) {
-        val target = customer ?: _uiState.value.selectedCustomer ?: _uiState.value.customers.firstOrNull()
-
-        val amount = target?.totalDue ?: 10000.0
-        val installment = if ((target?.installmentAmount ?: 0.0) > 0) target!!.installmentAmount else (amount / maxOf(1, target?.totalInstallments ?: 10))
-
-        val (isOverdue, overdueDays) = target?.let { LoanScheduleCalculator.getOverdueInfo(it) } ?: Pair(false, 0L)
-        val missedPayments = if (isOverdue) (overdueDays / 30 + 1).toInt() else 0
-
-        val paid = target?.paid ?: 0.0
-        val total = target?.totalDue ?: 10000.0
-        val paymentRatio = if (total > 0) (paid / total).coerceIn(0.0, 1.0) else 0.8
-
+    fun runAiPrediction() {
+        val token = sessionManager.authToken
+        if (token.isNullOrBlank()) {
+            _uiState.update {
+                it.copy(
+                    isPredictingAi = false,
+                    aiPredictionProbability = null,
+                    aiPredictionError = "Your session has expired. Please log in again."
+                )
+            }
+            return
+        }
         _uiState.update {
             it.copy(
                 isPredictingAi = true,
+                aiPredictionProbability = null,
                 aiPredictionError = null
             )
         }
 
         viewModelScope.launch {
-            val res = apiService.predictRepaymentProbability(
-                amount = amount,
-                installment = installment,
-                missedPayments = missedPayments,
-                paymentRatio = paymentRatio,
-                overdueDays = overdueDays.toInt()
-            )
-
-            res.onSuccess { probability ->
-                _uiState.update {
-                    it.copy(
-                        isPredictingAi = false,
-                        aiPredictionProbability = probability,
-                        aiPredictionError = null,
-                        userMessage = "FastAPI AI Model: Repayment probability is ${String.format(
-                            Locale.ROOT, "%.1f", probability * 100)}%"
-                    )
+            val result = apiService.predictRepaymentProbability(token)
+            result.onSuccess { prediction ->
+                when (prediction.status) {
+                    "ok" -> {
+                        val probability = prediction.repaymentProbability
+                        _uiState.update {
+                            it.copy(
+                                isPredictingAi = false,
+                                aiPredictionProbability = probability,
+                                aiPredictionError = null,
+                                userMessage = "Repayment prediction completed from your historical records."
+                            )
+                        }
+                    }
+                    "insufficient_data", "no_active_installments" -> {
+                        _uiState.update {
+                            it.copy(
+                                isPredictingAi = false,
+                                aiPredictionProbability = null,
+                                aiPredictionError = prediction.message
+                                    ?: "A prediction is not available for this account yet."
+                            )
+                        }
+                    }
                 }
             }.onFailure { err ->
+                val expiredSession = err is ApiHttpException && err.statusCode == 401
+                if (expiredSession) {
+                    repository.clearLocalData()
+                    sessionManager.clearSession()
+                }
                 _uiState.update {
                     it.copy(
                         isPredictingAi = false,
-                        aiPredictionError = err.message ?: "Failed to connect to FastAPI AI model at ${ApiConfig.getAiEndpoint("predict")}"
+                        customers = if (expiredSession) emptyList() else it.customers,
+                        payments = if (expiredSession) emptyList() else it.payments,
+                        aiPredictionError = when {
+                            expiredSession -> "Your session has expired. Please log in again."
+                            err is ApiHttpException && err.statusCode >= 500 ->
+                                "The prediction service is temporarily unavailable. Please try again."
+                            else -> err.message
+                                ?: "Could not reach the Credflow prediction service."
+                        },
+                        userMessage = if (expiredSession) {
+                            "Session expired. Please log in again."
+                        } else it.userMessage
                     )
                 }
             }

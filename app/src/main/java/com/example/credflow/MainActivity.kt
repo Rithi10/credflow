@@ -145,6 +145,12 @@ fun CredflowApp(intent: android.content.Intent? = null) {
         }
     }
 
+    LaunchedEffect(uiState.userMessage) {
+        if (uiState.userMessage == "Session expired. Please log in again.") {
+            resetTo(Screen.Splash)
+        }
+    }
+
     LaunchedEffect(intent, uiState.customers) {
         val targetScreen = intent?.getStringExtra(NotificationHelper.EXTRA_TARGET_SCREEN)
         val targetCustomerId = intent?.getIntExtra(NotificationHelper.EXTRA_CUSTOMER_ID, 0) ?: 0

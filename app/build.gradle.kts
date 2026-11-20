@@ -4,6 +4,33 @@ plugins {
     alias(libs.plugins.ksp)
 }
 
+val legacyApiBaseUrl = providers.gradleProperty("credflowApiBaseUrl")
+    .orElse(providers.environmentVariable("CRED_FLOW_API_BASE_URL"))
+val configuredApiBaseUrl = legacyApiBaseUrl.getOrElse("")
+val configuredDebugApiBaseUrl = providers.gradleProperty("credflowDebugApiBaseUrl")
+    .orElse(providers.environmentVariable("CRED_FLOW_DEBUG_API_BASE_URL"))
+    .orElse(legacyApiBaseUrl)
+    .getOrElse("")
+val configuredReleaseApiBaseUrl = providers.gradleProperty("credflowReleaseApiBaseUrl")
+    .orElse(providers.environmentVariable("CRED_FLOW_RELEASE_API_BASE_URL"))
+    .orElse(configuredApiBaseUrl)
+    .getOrElse("")
+val escapedApiBaseUrl = configuredApiBaseUrl
+    .replace("\\", "\\\\")
+    .replace("\"", "\\\"")
+val escapedDebugApiBaseUrl = configuredDebugApiBaseUrl
+    .replace("\\", "\\\\")
+    .replace("\"", "\\\"")
+val escapedReleaseApiBaseUrl = configuredReleaseApiBaseUrl
+    .replace("\\", "\\\\")
+    .replace("\"", "\\\"")
+
+if (configuredReleaseApiBaseUrl.isNotEmpty()) {
+    check(configuredReleaseApiBaseUrl.startsWith("https://", ignoreCase = true)) {
+        "credflowReleaseApiBaseUrl must use HTTPS."
+    }
+}
+
 android {
     namespace = "com.example.credflow"
     compileSdk {
@@ -18,13 +45,18 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("String", "CRED_FLOW_API_BASE_URL", "\"$escapedApiBaseUrl\"")
     }
 
     buildTypes {
         release {
+            buildConfigField("String", "CRED_FLOW_API_BASE_URL", "\"$escapedReleaseApiBaseUrl\"")
             optimization {
                 enable = false
             }
+        }
+        debug {
+            buildConfigField("String", "CRED_FLOW_API_BASE_URL", "\"$escapedDebugApiBaseUrl\"")
         }
     }
     compileOptions {

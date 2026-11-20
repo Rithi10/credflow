@@ -4,6 +4,7 @@ import com.example.credflow.data.remote.dto.AddCustomerRequestDto
 import com.example.credflow.data.remote.dto.AuthResponseDto
 import com.example.credflow.data.remote.dto.CustomerDto
 import com.example.credflow.data.remote.dto.PaymentDto
+import com.example.credflow.data.remote.dto.RepaymentPredictionDto
 import com.example.credflow.data.remote.dto.RecordPaymentRequestDto
 import com.example.credflow.data.remote.dto.RecordPaymentResponseDto
 import kotlinx.coroutines.Dispatchers
@@ -15,14 +16,20 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
+import java.net.SocketTimeoutException
 import java.util.concurrent.TimeUnit
+
+class ApiHttpException(
+    val statusCode: Int,
+    message: String
+) : IOException(message)
 
 class CredflowApiService {
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(12, TimeUnit.SECONDS)
-        .readTimeout(12, TimeUnit.SECONDS)
+        .readTimeout(20, TimeUnit.SECONDS)
         .writeTimeout(12, TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)
         .build()
@@ -354,11 +361,16 @@ class CredflowApiService {
                         )
                     )
                 } else {
-                    Result.failure(IOException("Session expired or invalid"))
+                    Result.failure(
+                        ApiHttpException(
+                            response.code,
+                            json.optString("error", "Could not validate the Credflow session.")
+                        )
+                    )
                 }
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(IOException("Could not reach the Credflow server.", e))
         }
     }
 
@@ -585,40 +597,70 @@ class CredflowApiService {
     }
 
     suspend fun predictRepaymentProbability(
-        amount: Double,
-        installment: Double,
-        missedPayments: Int,
-        paymentRatio: Double,
-        overdueDays: Int
-    ): Result<Double> = withContext(Dispatchers.IO) {
+        authToken: String?
+    ): Result<RepaymentPredictionDto> = withContext(Dispatchers.IO) {
+        if (authToken.isNullOrBlank()) {
+            return@withContext Result.failure(
+                IllegalStateException("Your session has expired. Please log in again.")
+            )
+        }
         try {
-            val jsonPayload = JSONObject().apply {
-                put("amount", amount)
-                put("installment", installment)
-                put("missed_payments", missedPayments)
-                put("payment_ratio", paymentRatio)
-                put("overdue_days", overdueDays)
-            }
-            val body = jsonPayload.toString().toRequestBody(jsonMediaType)
-            val url = ApiConfig.getAiEndpoint("predict")
+            val body = JSONObject().toString().toRequestBody(jsonMediaType)
             val request = Request.Builder()
-                .url(url)
+                .url(ApiConfig.getEndpoint("predict_repayment.php"))
+                .addHeader("Authorization", "Bearer $authToken")
                 .post(body)
                 .build()
 
             client.newCall(request).execute().use { response ->
                 val responseBody = response.body?.string() ?: ""
-                val json = try { JSONObject(responseBody) } catch (_: Exception) { JSONObject() }
-                if (response.isSuccessful && json.has("repayment_probability")) {
-                    val probability = json.optDouble("repayment_probability", 0.0)
-                    Result.success(probability)
-                } else {
-                    val errMsg = json.optString("detail", json.optString("error", "FastAPI error (HTTP ${response.code})"))
-                    Result.failure(IOException(errMsg))
+                val json = try {
+                    JSONObject(responseBody)
+                } catch (_: Exception) {
+                    JSONObject()
                 }
+                if (!response.isSuccessful) {
+                    val message = json.optString(
+                        "error",
+                        "Credflow server returned HTTP ${response.code}."
+                    )
+                    return@withContext Result.failure(
+                        ApiHttpException(response.code, message)
+                    )
+                }
+
+                val status = json.optString("status")
+                val message = json.optString("message").takeIf { it.isNotBlank() }
+                val prediction = RepaymentPredictionDto(
+                    status = status,
+                    repaymentProbability = if (json.has("repayment_probability")) {
+                        json.optDouble("repayment_probability", Double.NaN)
+                    } else null,
+                    predictedInstallments = json.optInt("predicted_installments", 0),
+                    historicalRows = json.optInt("historical_rows", 0),
+                    message = message
+                )
+                if (status !in setOf("ok", "insufficient_data", "no_active_installments")
+                    || (status == "ok" && (
+                        prediction.repaymentProbability == null
+                            || !prediction.repaymentProbability.isFinite()
+                            || prediction.repaymentProbability !in 0.0..1.0
+                        ))
+                ) {
+                    return@withContext Result.failure(
+                        IOException("Credflow server returned an invalid prediction response.")
+                    )
+                }
+                Result.success(prediction)
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(
+                if (e is SocketTimeoutException) {
+                    IOException("The repayment prediction request timed out.", e)
+                } else {
+                    IOException("Could not reach the Credflow prediction service.", e)
+                }
+            )
         }
     }
 

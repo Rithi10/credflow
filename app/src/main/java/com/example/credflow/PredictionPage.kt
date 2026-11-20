@@ -18,7 +18,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.credflow.data.remote.ApiConfig
 import com.example.credflow.domain.model.Customer
 import java.util.Locale
 
@@ -40,7 +39,7 @@ fun PredictionPage(
         item {
             Column {
                 Text("AI Repayment Prediction", fontSize = 23.sp, fontWeight = FontWeight.Bold, color = Navy)
-                Text("Connected to Python FastAPI Machine Learning Model", color = Muted, fontSize = 12.sp)
+                Text("Authenticated repayment insights from your Credflow account", color = Muted, fontSize = 12.sp)
             }
         }
 
@@ -68,14 +67,14 @@ fun PredictionPage(
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Icon(Icons.Default.AutoAwesome, null, tint = Blue)
-                            Text("FastAPI Model Service", fontWeight = FontWeight.Bold, color = Navy, fontSize = 15.sp)
+                            Text("Credflow Prediction Service", fontWeight = FontWeight.Bold, color = Navy, fontSize = 15.sp)
                         }
                         Surface(color = Color(0xFFEAF1FE), shape = RoundedCornerShape(8.dp)) {
-                            Text("POST /predict", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Blue, modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp))
+                            Text("PHP API", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Blue, modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp))
                         }
                     }
 
-                    Text("Target Endpoint: ${ApiConfig.getAiEndpoint("predict")}", fontSize = 12.sp, color = Muted)
+                    Text("Uses your signed-in session and account-specific repayment history.", fontSize = 12.sp, color = Muted)
 
                     Button(
                         onClick = onRunPrediction,
@@ -85,11 +84,11 @@ fun PredictionPage(
                         if (isPredicting) {
                             CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = Color.White)
                             Spacer(Modifier.width(10.dp))
-                            Text("Querying FastAPI AI Model...", fontSize = 14.sp)
+                            Text("Checking your repayment history...", fontSize = 14.sp)
                         } else {
                             Icon(Icons.Default.AutoAwesome, null)
                             Spacer(Modifier.width(8.dp))
-                            Text("Run AI Repayment Prediction", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                            Text("Run Repayment Prediction", fontSize = 14.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -110,7 +109,7 @@ fun PredictionPage(
                         Spacer(Modifier.width(14.dp))
                         Column {
                             Text("Predicting Repayment Probability...", fontWeight = FontWeight.Bold, color = Navy, fontSize = 14.sp)
-                            Text("Evaluating parameters on Python FastAPI backend...", color = Muted, fontSize = 12.sp)
+                            Text("Evaluating account-specific historical repayments...", color = Muted, fontSize = 12.sp)
                         }
                     }
                 }
@@ -153,9 +152,9 @@ fun PredictionPage(
                             Icon(Icons.Default.CheckCircle, null, tint = Green, modifier = Modifier.size(18.dp))
                             Text(
                                 if (probPercent >= 80.0)
-                                    "FastAPI AI Model predicts a high likelihood of complete on-time repayment."
+                                    "Historical repayment patterns indicate a higher likelihood of repayment within the outcome window."
                                 else
-                                    "FastAPI AI Model recommends increased collection frequency for this portfolio.",
+                                    "Historical repayment patterns indicate a lower likelihood of repayment within the outcome window.",
                                 color = Color.White,
                                 fontSize = 12.sp
                             )
@@ -174,7 +173,7 @@ fun PredictionPage(
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Icon(Icons.Default.ErrorOutline, null, tint = Color(0xFFC62828))
-                            Text("FastAPI AI Connection Error", fontWeight = FontWeight.Bold, color = Color(0xFFC62828), fontSize = 14.sp)
+                            Text("Prediction unavailable", fontWeight = FontWeight.Bold, color = Color(0xFFC62828), fontSize = 14.sp)
                         }
                         Text(errorMsg, color = Color(0xFFB71C1C), fontSize = 12.sp)
 
@@ -186,7 +185,7 @@ fun PredictionPage(
                         ) {
                             Icon(Icons.Default.Refresh, null, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(6.dp))
-                            Text("Retry FastAPI Prediction", fontSize = 13.sp)
+                            Text("Retry prediction", fontSize = 13.sp)
                         }
                     }
                 }
@@ -197,7 +196,7 @@ fun PredictionPage(
             CycleCard(
                 "Repayment Risk Details",
                 "View data summary",
-                "Understand live metrics sent to FastAPI AI model",
+                "Understand account-specific historical repayment trends",
                 Icons.Default.Insights,
                 onDetails
             )
