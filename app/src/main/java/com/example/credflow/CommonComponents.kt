@@ -89,7 +89,7 @@ fun CustomerCard(customer: Customer, onClick: () -> Unit, onCollect: () -> Unit)
                 Column(Modifier.weight(1f)) {
                     Text(customer.name, fontWeight = FontWeight.Bold, color = Navy)
                     Text(customer.phone, fontSize = 12.sp, color = Muted)
-                    Text("${customer.cycle} · ${customer.day}", fontSize = 11.sp, color = Muted)
+                    Text(customer.scheduleDisplayLabel, fontSize = 11.sp, color = if (customer.scheduleNeedsCorrection) Color(0xFFC62828) else Muted)
                 }
                 Column(horizontalAlignment = Alignment.End) {
                     Text(rupees(customer.due), color = if (customer.due > 0) Orange else Green, fontWeight = FontWeight.Bold)

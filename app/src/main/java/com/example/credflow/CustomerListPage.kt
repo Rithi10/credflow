@@ -29,8 +29,10 @@ fun weekdayScreen(day: String): Screen = when (day.lowercase()) {
 @Composable
 fun CustomerListPage(
     title: String, cycle: String, customers: List<Customer>, onAdd: () -> Unit,
-    onSelect: (Customer) -> Unit, onCollect: (Customer) -> Unit, onWeekday: (String) -> Unit
+    onSelect: (Customer) -> Unit, onCollect: (Customer) -> Unit, onWeekday: (String) -> Unit,
+    weekdayCounts: Map<String, Int> = emptyMap()
 ) {
+    val missingScheduleCount = customers.count { it.scheduleNeedsCorrection }
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -48,11 +50,21 @@ fun CustomerListPage(
                     listOf(listOf("Monday", "Tuesday"), listOf("Wednesday", "Thursday"), listOf("Friday", "Saturday"), listOf("Sunday")).forEach { row ->
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             row.forEach { weekday ->
-                                OutlinedButton(onClick = { onWeekday(weekday) }, modifier = Modifier.weight(1f)) { Text(weekday, fontSize = 11.sp) }
+                                val cnt = weekdayCounts[weekday] ?: 0
+                                val label = if (cnt > 0) "$weekday ($cnt)" else weekday
+                                OutlinedButton(onClick = { onWeekday(weekday) }, modifier = Modifier.weight(1f)) { Text(label, fontSize = 11.sp) }
                             }
                         }
                     }
                 }
+            }
+        }
+        if (missingScheduleCount > 0) {
+            item {
+                InfoCard(
+                    "$missingScheduleCount customer(s) missing schedule",
+                    "Legacy records without a stored weekday or due date were left unassigned instead of guessing."
+                )
             }
         }
         if (customers.isEmpty()) item { EmptyCard("No customers yet", "Tap Add to create your first ${cycle.lowercase()} customer.") }
